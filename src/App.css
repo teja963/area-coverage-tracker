@@ -859,6 +859,10 @@ button {
   font-family: inherit;
 }
 
+.base-map-tiles {
+  filter: saturate(0.72) brightness(1.06) contrast(0.94);
+}
+
 .leaflet-control-attribution {
   margin-bottom: 85px !important;
   color: #7a8490 !important;
