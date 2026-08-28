@@ -75,6 +75,7 @@ type Tab = 'map' | 'areas' | 'history'
 const BENGALURU: LatLngExpression = [12.917, 77.61]
 const STORAGE_KEY = 'coverly-projects-v1'
 const ACTIVE_PROJECT_KEY = 'coverly-active-project-v1'
+const STARTER_PROJECT_KEY = 'coverly-bengaluru-starter-v1'
 const EARTH_RADIUS = 6378137
 const AREA_COLORS = [
   '#2563eb',
@@ -101,17 +102,68 @@ const newProject = (): Project => {
   }
 }
 
+const bengaluruStarterZones = (): Zone[] => [
+  {
+    id: uid(),
+    name: 'Jayadeva Hospital',
+    lat: 12.916731,
+    lng: 77.5999663,
+    radius: 4000,
+    color: AREA_COLORS[0],
+  },
+  {
+    id: uid(),
+    name: 'BTM Layout',
+    lat: 12.9140008,
+    lng: 77.6102821,
+    radius: 4000,
+    color: AREA_COLORS[1],
+  },
+  {
+    id: uid(),
+    name: 'Silk Board Junction',
+    lat: 12.9158171,
+    lng: 77.6240368,
+    radius: 4000,
+    color: AREA_COLORS[2],
+  },
+  {
+    id: uid(),
+    name: 'Bommanahalli',
+    lat: 12.9089453,
+    lng: 77.6239038,
+    radius: 4000,
+    color: AREA_COLORS[3],
+  },
+]
+
 function loadProjects(): Project[] {
   try {
     const stored = localStorage.getItem(STORAGE_KEY)
     if (stored) {
       const parsed = JSON.parse(stored) as Project[]
-      if (Array.isArray(parsed) && parsed.length) return parsed
+      if (Array.isArray(parsed) && parsed.length) {
+        const hasAreas = parsed.some((project) => project.zones.length > 0)
+        if (!hasAreas && !localStorage.getItem(STARTER_PROJECT_KEY)) {
+          parsed[0] = {
+            ...parsed[0],
+            name: 'Bengaluru house search',
+            zones: bengaluruStarterZones(),
+            updatedAt: Date.now(),
+          }
+          localStorage.setItem(STARTER_PROJECT_KEY, 'loaded')
+        }
+        return parsed
+      }
     }
   } catch {
     // Start clean if old local data is invalid.
   }
-  return [newProject()]
+  const starter = newProject()
+  starter.name = 'Bengaluru house search'
+  starter.zones = bengaluruStarterZones()
+  localStorage.setItem(STARTER_PROJECT_KEY, 'loaded')
+  return [starter]
 }
 
 async function findPlaces(term: string, signal?: AbortSignal): Promise<SearchResult[]> {
@@ -282,10 +334,10 @@ function TrackpadPan({ onManualMove }: { onManualMove: () => void }) {
       }
 
       const pointer = map.mouseEventToContainerPoint(event)
-      const limitedDelta = Math.sign(event.deltaY) * Math.min(Math.abs(event.deltaY), 25)
+      const limitedDelta = Math.sign(event.deltaY) * Math.min(Math.abs(event.deltaY), 20)
       const targetZoom = Math.max(
         map.getMinZoom(),
-        Math.min(map.getMaxZoom(), map.getZoom() - limitedDelta * 0.018),
+        Math.min(map.getMaxZoom(), map.getZoom() - limitedDelta * 0.045),
       )
       map.setZoomAround(pointer, targetZoom)
     }
@@ -1244,6 +1296,24 @@ function App() {
                 </button>
               ))}
               {searchError && <div className="suggestion-status error">{searchError}</div>}
+            </div>
+          )}
+
+          {activeProject.zones.length > 0 && (
+            <div className="area-map-key" aria-label="Search area color key">
+              {activeProject.zones.map((zone, index) => (
+                <button
+                  type="button"
+                  key={zone.id}
+                  onClick={() => setFocus({ lat: zone.lat, lng: zone.lng, zoom: 13 })}
+                >
+                  <i style={{ background: getZoneColor(zone, index) }} />
+                  <span>
+                    <strong>{index + 1}. {zone.name}</strong>
+                    <small>{formatDistance(zone.radius)}</small>
+                  </span>
+                </button>
+              ))}
             </div>
           )}
 
