@@ -42,9 +42,14 @@ type Zone = {
   name: string
   lat: number
   lng: number
-  radius: number
+  radius?: number
   color?: string
+  geometry?: BoundaryGeometry
 }
+
+type BoundaryGeometry =
+  | { type: 'Polygon'; coordinates: number[][][] }
+  | { type: 'MultiPolygon'; coordinates: number[][][][] }
 
 type TrackPoint = {
   lat: number
@@ -73,9 +78,10 @@ type SearchResult = {
 type Tab = 'map' | 'areas' | 'history'
 
 const BENGALURU: LatLngExpression = [12.917, 77.61]
-const STORAGE_KEY = 'coverly-projects-v1'
-const ACTIVE_PROJECT_KEY = 'coverly-active-project-v1'
-const STARTER_PROJECT_KEY = 'coverly-bengaluru-starter-v1'
+const STORAGE_KEY = 'coverly-projects-v2'
+const ACTIVE_PROJECT_KEY = 'coverly-active-project-v2'
+const LEGACY_STORAGE_KEY = 'coverly-projects-v1'
+const LEGACY_ACTIVE_PROJECT_KEY = 'coverly-active-project-v1'
 const EARTH_RADIUS = 6378137
 const AREA_COLORS = [
   '#2563eb',
@@ -102,68 +108,30 @@ const newProject = (): Project => {
   }
 }
 
-const bengaluruStarterZones = (): Zone[] => [
-  {
-    id: uid(),
-    name: 'Jayadeva Hospital',
-    lat: 12.916731,
-    lng: 77.5999663,
-    radius: 4000,
-    color: AREA_COLORS[0],
-  },
-  {
-    id: uid(),
-    name: 'BTM Layout',
-    lat: 12.9140008,
-    lng: 77.6102821,
-    radius: 4000,
-    color: AREA_COLORS[1],
-  },
-  {
-    id: uid(),
-    name: 'Silk Board Junction',
-    lat: 12.9158171,
-    lng: 77.6240368,
-    radius: 4000,
-    color: AREA_COLORS[2],
-  },
-  {
-    id: uid(),
-    name: 'Bommanahalli',
-    lat: 12.9089453,
-    lng: 77.6239038,
-    radius: 4000,
-    color: AREA_COLORS[3],
-  },
-]
-
 function loadProjects(): Project[] {
   try {
     const stored = localStorage.getItem(STORAGE_KEY)
     if (stored) {
       const parsed = JSON.parse(stored) as Project[]
-      if (Array.isArray(parsed) && parsed.length) {
-        const hasAreas = parsed.some((project) => project.zones.length > 0)
-        if (!hasAreas && !localStorage.getItem(STARTER_PROJECT_KEY)) {
-          parsed[0] = {
-            ...parsed[0],
-            name: 'Bengaluru house search',
-            zones: bengaluruStarterZones(),
-            updatedAt: Date.now(),
-          }
-          localStorage.setItem(STARTER_PROJECT_KEY, 'loaded')
-        }
-        return parsed
+      if (Array.isArray(parsed) && parsed.length) return parsed
+    }
+    const legacyStored = localStorage.getItem(LEGACY_STORAGE_KEY)
+    if (legacyStored) {
+      const legacyProjects = JSON.parse(legacyStored) as Project[]
+      if (Array.isArray(legacyProjects) && legacyProjects.length) {
+        const migrated = legacyProjects.map((project) => ({
+          ...project,
+          zones: project.zones.filter((zone) => zone.geometry),
+          updatedAt: Date.now(),
+        }))
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(migrated))
+        return migrated
       }
     }
   } catch {
     // Start clean if old local data is invalid.
   }
-  const starter = newProject()
-  starter.name = 'Bengaluru house search'
-  starter.zones = bengaluruStarterZones()
-  localStorage.setItem(STARTER_PROJECT_KEY, 'loaded')
-  return [starter]
+  return [newProject()]
 }
 
 async function findPlaces(term: string, signal?: AbortSignal): Promise<SearchResult[]> {
@@ -208,6 +176,86 @@ async function findPlaces(term: string, signal?: AbortSignal): Promise<SearchRes
       type: String(place.type || place.osm_value || 'place'),
     }
   })
+}
+
+async function findBoundary(result: SearchResult): Promise<BoundaryGeometry | null> {
+  const params = new URLSearchParams({
+    q: result.display_name,
+    format: 'geojson',
+    polygon_geojson: '1',
+    polygon_threshold: '0.0003',
+    limit: '5',
+  })
+  const response = await fetch(`https://nominatim.openstreetmap.org/search?${params}`)
+  if (!response.ok) throw new Error('Boundary lookup unavailable')
+  const data = (await response.json()) as {
+    features: Array<{ geometry: BoundaryGeometry | { type: string } }>
+  }
+  const match = data.features.find(
+    (feature) => feature.geometry.type === 'Polygon' || feature.geometry.type === 'MultiPolygon',
+  )
+  return (match?.geometry as BoundaryGeometry | undefined) ?? null
+}
+
+function geometryRings(geometry: BoundaryGeometry) {
+  return geometry.type === 'Polygon'
+    ? [geometry.coordinates[0]]
+    : geometry.coordinates.map((polygon) => polygon[0])
+}
+
+function pointInRing(lng: number, lat: number, ring: number[][]) {
+  let inside = false
+  for (let index = 0, previous = ring.length - 1; index < ring.length; previous = index++) {
+    const [currentLng, currentLat] = ring[index]
+    const [previousLng, previousLat] = ring[previous]
+    const crosses =
+      currentLat > lat !== previousLat > lat &&
+      lng <
+        ((previousLng - currentLng) * (lat - currentLat)) /
+          (previousLat - currentLat || Number.EPSILON) +
+          currentLng
+    if (crosses) inside = !inside
+  }
+  return inside
+}
+
+function pointInGeometry(lng: number, lat: number, geometry: BoundaryGeometry) {
+  return geometryRings(geometry).some((ring) => pointInRing(lng, lat, ring))
+}
+
+function ringsCross(first: number[][], second: number[][]) {
+  const direction = (a: number[], b: number[], c: number[]) =>
+    (c[0] - a[0]) * (b[1] - a[1]) - (c[1] - a[1]) * (b[0] - a[0])
+
+  for (let firstIndex = 1; firstIndex < first.length; firstIndex += 1) {
+    for (let secondIndex = 1; secondIndex < second.length; secondIndex += 1) {
+      const a = first[firstIndex - 1]
+      const b = first[firstIndex]
+      const c = second[secondIndex - 1]
+      const d = second[secondIndex]
+      if (
+        direction(a, b, c) * direction(a, b, d) < 0 &&
+        direction(c, d, a) * direction(c, d, b) < 0
+      ) {
+        return true
+      }
+    }
+  }
+  return false
+}
+
+function geometriesOverlap(first: BoundaryGeometry, second: BoundaryGeometry) {
+  return (
+    geometryRings(first).some((ring) =>
+      ring.slice(0, -1).some(([lng, lat]) => pointInGeometry(lng, lat, second)),
+    ) ||
+    geometryRings(second).some((ring) =>
+      ring.slice(0, -1).some(([lng, lat]) => pointInGeometry(lng, lat, first)),
+    ) ||
+    geometryRings(first).some((firstRing) =>
+      geometryRings(second).some((secondRing) => ringsCross(firstRing, secondRing)),
+    )
+  )
 }
 
 function distanceMeters(a: Pick<TrackPoint, 'lat' | 'lng'>, b: Pick<TrackPoint, 'lat' | 'lng'>) {
@@ -337,7 +385,7 @@ function TrackpadPan({ onManualMove }: { onManualMove: () => void }) {
       const limitedDelta = Math.sign(event.deltaY) * Math.min(Math.abs(event.deltaY), 20)
       const targetZoom = Math.max(
         map.getMinZoom(),
-        Math.min(map.getMaxZoom(), map.getZoom() - limitedDelta * 0.045),
+        Math.min(map.getMaxZoom(), map.getZoom() - limitedDelta * 0.11),
       )
       map.setZoomAround(pointer, targetZoom)
     }
@@ -352,7 +400,9 @@ function TrackpadPan({ onManualMove }: { onManualMove: () => void }) {
 function App() {
   const [projects, setProjects] = useState<Project[]>(loadProjects)
   const [activeId, setActiveId] = useState(() => {
-    const savedId = localStorage.getItem(ACTIVE_PROJECT_KEY)
+    const savedId =
+      localStorage.getItem(ACTIVE_PROJECT_KEY) ||
+      localStorage.getItem(LEGACY_ACTIVE_PROJECT_KEY)
     return projects.some((project) => project.id === savedId) ? savedId! : projects[0].id
   })
   const [tab, setTab] = useState<Tab>('map')
@@ -362,7 +412,8 @@ function App() {
   const [gpsAccuracy, setGpsAccuracy] = useState<number | null>(null)
   const [liveSpeed, setLiveSpeed] = useState<number | null>(null)
   const [isAdding, setIsAdding] = useState(false)
-  const [radius, setRadius] = useState(1000)
+  const [draftPoints, setDraftPoints] = useState<Array<{ lat: number; lng: number }>>([])
+  const [isResolvingBoundary, setIsResolvingBoundary] = useState(false)
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<SearchResult[]>([])
   const [isSearching, setIsSearching] = useState(false)
@@ -517,27 +568,53 @@ function App() {
       return { data: null, covered: 0, total: 0, cellSize: 150 }
     }
 
-    const estimatedArea = activeProject.zones.reduce(
-      (sum, zone) => sum + Math.PI * zone.radius ** 2,
+    const zoneBounds = activeProject.zones.map((zone) => {
+      if (zone.geometry) {
+        const projected = geometryRings(zone.geometry)
+          .flat()
+          .map(([lng, lat]) => toMercator(lat, lng))
+        return {
+          minX: Math.min(...projected.map((point) => point.x)),
+          maxX: Math.max(...projected.map((point) => point.x)),
+          minY: Math.min(...projected.map((point) => point.y)),
+          maxY: Math.max(...projected.map((point) => point.y)),
+        }
+      }
+      const center = toMercator(zone.lat, zone.lng)
+      const radius = (zone.radius ?? 500) / Math.cos((zone.lat * Math.PI) / 180)
+      return {
+        minX: center.x - radius,
+        maxX: center.x + radius,
+        minY: center.y - radius,
+        maxY: center.y + radius,
+      }
+    })
+    const estimatedArea = zoneBounds.reduce(
+      (sum, bounds) => sum + (bounds.maxX - bounds.minX) * (bounds.maxY - bounds.minY),
       0,
     )
-    const cellSize = Math.max(100, Math.min(400, Math.sqrt(estimatedArea / 2600)))
+    const cellSize = Math.max(60, Math.min(250, Math.sqrt(estimatedArea / 2600)))
     const cells = new Map<string, { ix: number; iy: number; color: string }>()
 
     activeProject.zones.forEach((zone, zoneIndex) => {
+      const bounds = zoneBounds[zoneIndex]
+      const minX = Math.floor(bounds.minX / cellSize)
+      const maxX = Math.floor(bounds.maxX / cellSize)
+      const minY = Math.floor(bounds.minY / cellSize)
+      const maxY = Math.floor(bounds.maxY / cellSize)
       const center = toMercator(zone.lat, zone.lng)
-      const scale = 1 / Math.cos((zone.lat * Math.PI) / 180)
-      const projectedRadius = zone.radius * scale
-      const minX = Math.floor((center.x - projectedRadius) / cellSize)
-      const maxX = Math.floor((center.x + projectedRadius) / cellSize)
-      const minY = Math.floor((center.y - projectedRadius) / cellSize)
-      const maxY = Math.floor((center.y + projectedRadius) / cellSize)
+      const projectedRadius =
+        (zone.radius ?? 500) / Math.cos((zone.lat * Math.PI) / 180)
 
       for (let ix = minX; ix <= maxX; ix += 1) {
         for (let iy = minY; iy <= maxY; iy += 1) {
           const x = (ix + 0.5) * cellSize
           const y = (iy + 0.5) * cellSize
-          if (Math.hypot(x - center.x, y - center.y) <= projectedRadius) {
+          const cellCenter = fromMercator(x, y)
+          const isInside = zone.geometry
+            ? pointInGeometry(cellCenter.lng, cellCenter.lat, zone.geometry)
+            : Math.hypot(x - center.x, y - center.y) <= projectedRadius
+          if (isInside) {
             const id = `${ix}:${iy}`
             if (!cells.has(id)) {
               cells.set(id, { ix, iy, color: getZoneColor(zone, zoneIndex) })
@@ -600,26 +677,92 @@ function App() {
   const coveragePercent =
     coverage.total > 0 ? Math.round((coverage.covered / coverage.total) * 100) : 0
 
-  const addZone = (lat: number, lng: number, name = `Area ${activeProject.zones.length + 1}`) => {
+  const addBoundaryZone = async (result: SearchResult) => {
+    setIsResolvingBoundary(true)
+    setSearchError('')
+    try {
+      const geometry = await findBoundary(result)
+      if (!geometry) {
+        setSearchError('This place has no mapped boundary. Use “Draw custom boundary” instead.')
+        return
+      }
+      if (
+        activeProject.zones.some(
+          (zone) => zone.geometry && geometriesOverlap(zone.geometry, geometry),
+        )
+      ) {
+        setSearchError('This boundary overlaps an existing area. Choose a separate layout.')
+        return
+      }
+      const lat = Number(result.lat)
+      const lng = Number(result.lon)
+      updateProject((project) => ({
+        ...project,
+        zones: [
+          ...project.zones,
+          {
+            id: uid(),
+            name: result.display_name.split(',')[0],
+            lat,
+            lng,
+            geometry,
+            color: AREA_COLORS[project.zones.length % AREA_COLORS.length],
+          },
+        ],
+      }))
+      setFocus({ lat, lng, zoom: 14 })
+      setQuery('')
+      setResults([])
+    } catch {
+      setSearchError('Could not load this boundary. Draw the custom boundary on the map.')
+    } finally {
+      setIsResolvingBoundary(false)
+    }
+  }
+
+  const addDraftPoint = (lat: number, lng: number) => {
+    setDraftPoints((points) => [...points, { lat, lng }])
+  }
+
+  const finishCustomBoundary = () => {
+    if (draftPoints.length < 3) {
+      setSearchError('Add at least three map points to complete a boundary.')
+      return
+    }
+    const geometry: BoundaryGeometry = {
+      type: 'Polygon',
+      coordinates: [[
+        ...draftPoints.map((point) => [point.lng, point.lat]),
+        [draftPoints[0].lng, draftPoints[0].lat],
+      ]],
+    }
+    if (
+      activeProject.zones.some(
+        (zone) => zone.geometry && geometriesOverlap(zone.geometry, geometry),
+      )
+    ) {
+      setSearchError('The drawn boundary overlaps an existing area. Adjust its points.')
+      return
+    }
+    const lat = draftPoints.reduce((sum, point) => sum + point.lat, 0) / draftPoints.length
+    const lng = draftPoints.reduce((sum, point) => sum + point.lng, 0) / draftPoints.length
     updateProject((project) => ({
       ...project,
       zones: [
         ...project.zones,
         {
           id: uid(),
-          name,
+          name: `Custom area ${project.zones.length + 1}`,
           lat,
           lng,
-          radius,
+          geometry,
           color: AREA_COLORS[project.zones.length % AREA_COLORS.length],
         },
       ],
     }))
-    setFocus({ lat, lng, zoom: 14 })
+    setDraftPoints([])
     setIsAdding(false)
-    setQuery('')
-    setResults([])
-    setTab('areas')
+    setFocus({ lat, lng, zoom: 14 })
   }
 
   const searchPlaces = async (event: React.FormEvent) => {
@@ -636,7 +779,7 @@ function App() {
     }
   }
 
-  const locateMe = (addAsZone = false) => {
+  const locateMe = () => {
     if (!navigator.geolocation) {
       setGpsError('GPS is not supported by this browser.')
       return
@@ -655,7 +798,6 @@ function App() {
         setLiveSpeed(coords.speed)
         setFollowUser(true)
         setFocus({ lat: coords.latitude, lng: coords.longitude, zoom: 16 })
-        if (addAsZone) addZone(coords.latitude, coords.longitude, 'My location')
       },
       (error) => setGpsError(error.message || 'Could not get your location.'),
       { enableHighAccuracy: true, timeout: 15000 },
@@ -913,7 +1055,7 @@ function App() {
                 <section className="area-builder">
                   <div className="builder-title">
                     <span><CirclePlus size={18} /></span>
-                    <div><strong>Add a circle point</strong><small>Choose the place and exact radius</small></div>
+                    <div><strong>Add a layout boundary</strong><small>Mapped locality or custom outline</small></div>
                   </div>
 
                   <form className="search-form" onSubmit={searchPlaces}>
@@ -942,13 +1084,7 @@ function App() {
                         <button
                           type="button"
                           key={result.place_id}
-                          onClick={() =>
-                            addZone(
-                              Number(result.lat),
-                              Number(result.lon),
-                              result.display_name.split(',')[0],
-                            )
-                          }
+                          onClick={() => addBoundaryZone(result)}
                         >
                           <MapPin size={17} />
                           <span>{result.display_name.split(',')[0]}<small>{result.display_name}</small></span>
@@ -957,46 +1093,21 @@ function App() {
                       ))}
                     </div>
                   )}
-
-                  <div className="radius-control">
-                    <div>
-                      <label htmlFor="new-radius">Circle radius</label>
-                      <label className="radius-number">
-                        <input
-                          type="number"
-                          min="0.1"
-                          max="10"
-                          step="0.1"
-                          value={Number((radius / 1000).toFixed(1))}
-                          onChange={(event) =>
-                            setRadius(Math.max(100, Math.min(10000, Number(event.target.value) * 1000)))
-                          }
-                          aria-label="Circle radius in kilometres"
-                        />
-                        <span>km</span>
-                      </label>
-                    </div>
-                    <input
-                      id="new-radius"
-                      type="range"
-                      min="100"
-                      max="10000"
-                      step="100"
-                      value={radius}
-                      onChange={(event) => setRadius(Number(event.target.value))}
-                    />
-                    <div className="range-labels"><span>100 m</span><span>10 km</span></div>
-                  </div>
+                  {isResolvingBoundary && <p className="hint">Loading locality boundary…</p>}
 
                   <div className="add-actions">
                     <button
                       type="button"
                       className={`secondary-button ${isAdding ? 'active' : ''}`}
-                      onClick={() => setIsAdding((adding) => !adding)}
+                      onClick={() => {
+                        setIsAdding((adding) => !adding)
+                        setDraftPoints([])
+                        setTab('map')
+                      }}
                     >
-                      <Crosshair size={17} /> {isAdding ? 'Tap map now' : 'Pick on map'}
+                      <Crosshair size={17} /> {isAdding ? 'Drawing boundary…' : 'Draw custom boundary'}
                     </button>
-                    <button type="button" className="secondary-button" onClick={() => locateMe(true)}>
+                    <button type="button" className="secondary-button" onClick={() => locateMe()}>
                       <LocateFixed size={17} /> My location
                     </button>
                   </div>
@@ -1005,8 +1116,8 @@ function App() {
                 {activeProject.zones.length === 0 ? (
                   <div className="empty-state">
                     <CirclePlus size={29} />
-                    <strong>Add your first search area</strong>
-                    <span>Search a place, tap the map, or use your current location.</span>
+                    <strong>Add your first independent layout</strong>
+                    <span>Search for a mapped boundary or draw the exact custom outline.</span>
                   </div>
                 ) : (
                   <div className="zone-list">
@@ -1054,52 +1165,10 @@ function App() {
                         >
                           <Trash2 size={16} />
                         </button>
-                        <div className="zone-radius">
-                          <span>Radius</span>
-                          <input
-                            type="range"
-                            min="100"
-                            max="10000"
-                            step="100"
-                            value={zone.radius}
-                            aria-label={`${zone.name} radius`}
-                            onChange={(event) =>
-                              updateProject((project) => ({
-                                ...project,
-                                zones: project.zones.map((item) =>
-                                  item.id === zone.id
-                                    ? { ...item, radius: Number(event.target.value) }
-                                    : item,
-                                ),
-                              }))
-                            }
-                          />
-                          <label className="zone-radius-number">
-                            <input
-                              type="number"
-                              min="0.1"
-                              max="10"
-                              step="0.1"
-                              value={Number((zone.radius / 1000).toFixed(1))}
-                              onChange={(event) =>
-                                updateProject((project) => ({
-                                  ...project,
-                                  zones: project.zones.map((item) =>
-                                    item.id === zone.id
-                                      ? {
-                                          ...item,
-                                          radius: Math.max(
-                                            100,
-                                            Math.min(10000, Number(event.target.value) * 1000),
-                                          ),
-                                        }
-                                      : item,
-                                  ),
-                                }))
-                              }
-                            />
-                            <span>km</span>
-                          </label>
+                        <div className="zone-boundary-summary">
+                          <span className="boundary-status" />
+                          <strong>{zone.geometry ? 'Independent boundary' : 'Legacy circle'}</strong>
+                          <small>{zone.geometry ? `${geometryRings(zone.geometry).flat().length - 1} boundary points` : 'Recreate as a boundary'}</small>
                         </div>
                       </article>
                     ))}
@@ -1152,7 +1221,7 @@ function App() {
             center={BENGALURU}
             zoom={13}
             zoomControl={false}
-            zoomSnap={0.05}
+            zoomSnap={0.01}
             zoomDelta={0.5}
             scrollWheelZoom={false}
             touchZoom
@@ -1170,7 +1239,7 @@ function App() {
             <TrackpadPan onManualMove={() => setFollowUser(false)} />
             <MapClickHandler
               enabled={isAdding}
-              onAdd={addZone}
+              onAdd={addDraftPoint}
               onManualMove={() => setFollowUser(false)}
             />
             {coverage.data && (
@@ -1178,29 +1247,61 @@ function App() {
                 key={`${activeProject.id}-${coverage.total}-${coverage.covered}-${coverage.cellSize}`}
                 data={coverage.data}
                 style={(feature) => ({
-                  color: feature?.properties.color,
-                  weight: feature?.properties.visited ? 1.15 : 0.65,
-                  fillColor: feature?.properties.color,
-                  fillOpacity: feature?.properties.visited ? 0.5 : 0.13,
+                  color: feature?.properties.visited ? '#059669' : feature?.properties.color,
+                  weight: feature?.properties.visited ? 0.8 : 0,
+                  fillColor: feature?.properties.visited ? '#34d399' : feature?.properties.color,
+                  fillOpacity: feature?.properties.visited ? 0.2 : 0.02,
                   interactive: false,
                 })}
               />
             )}
             {activeProject.zones.map((zone, index) => (
-              <Circle
-                key={zone.id}
-                center={[zone.lat, zone.lng]}
-                radius={zone.radius}
-                pathOptions={{
-                  color: getZoneColor(zone, index),
-                  weight: 3,
-                  fillColor: getZoneColor(zone, index),
-                  fillOpacity: 0.2,
-                }}
-              >
-                <Tooltip sticky>{index + 1}. {zone.name} · {formatDistance(zone.radius)}</Tooltip>
-              </Circle>
+              zone.geometry ? (
+                <GeoJSON
+                  key={zone.id}
+                  data={zone.geometry}
+                  style={{
+                    color: getZoneColor(zone, index),
+                    weight: 2,
+                    fillColor: getZoneColor(zone, index),
+                    fillOpacity: 0.055,
+                  }}
+                />
+              ) : (
+                <Circle
+                  key={zone.id}
+                  center={[zone.lat, zone.lng]}
+                  radius={zone.radius ?? 500}
+                  pathOptions={{
+                    color: getZoneColor(zone, index),
+                    weight: 2,
+                    fillColor: getZoneColor(zone, index),
+                    fillOpacity: 0.06,
+                  }}
+                />
+              )
             ))}
+            {draftPoints.length > 0 && (
+              <>
+                <Polyline
+                  positions={[
+                    ...draftPoints.map((point) => [point.lat, point.lng] as LatLngExpression),
+                    ...(draftPoints.length > 2
+                      ? [[draftPoints[0].lat, draftPoints[0].lng] as LatLngExpression]
+                      : []),
+                  ]}
+                  pathOptions={{ color: '#1a73e8', weight: 3, dashArray: '7 5' }}
+                />
+                {draftPoints.map((point, index) => (
+                  <CircleMarker
+                    key={`${point.lat}-${point.lng}-${index}`}
+                    center={[point.lat, point.lng]}
+                    radius={5}
+                    pathOptions={{ color: '#fff', weight: 2, fillColor: '#1a73e8', fillOpacity: 1 }}
+                  />
+                ))}
+              </>
+            )}
             {activeProject.zones.map((zone, index) => (
               <CircleMarker
                 key={`${zone.id}-point`}
@@ -1221,7 +1322,7 @@ function App() {
                     <span>{index + 1}</span>
                     <div>
                       <strong>{zone.name}</strong>
-                      <small>{formatDistance(zone.radius)} radius</small>
+                      <small>Independent boundary</small>
                     </div>
                   </div>
                 </Tooltip>
@@ -1230,7 +1331,7 @@ function App() {
                     <span className="popup-number" style={{ background: getZoneColor(zone, index) }}>{index + 1}</span>
                     <div>
                       <strong>{zone.name}</strong>
-                      <span>Target radius: {formatDistance(zone.radius)}</span>
+                      <span>{zone.geometry ? 'Independent layout boundary' : 'Legacy circle area'}</span>
                       <small>{zone.lat.toFixed(5)}, {zone.lng.toFixed(5)}</small>
                     </div>
                   </div>
@@ -1280,13 +1381,7 @@ function App() {
                 <button
                   type="button"
                   key={result.place_id}
-                  onClick={() =>
-                    addZone(
-                      Number(result.lat),
-                      Number(result.lon),
-                      result.display_name.split(',')[0],
-                    )
-                  }
+                  onClick={() => addBoundaryZone(result)}
                 >
                   <span className="suggestion-icon"><MapPin size={16} /></span>
                   <span>
@@ -1310,7 +1405,7 @@ function App() {
                   <i style={{ background: getZoneColor(zone, index) }} />
                   <span>
                     <strong>{index + 1}. {zone.name}</strong>
-                    <small>{formatDistance(zone.radius)}</small>
+                    <small>Boundary</small>
                   </span>
                 </button>
               ))}
@@ -1323,7 +1418,13 @@ function App() {
             <span><strong>{gpsAccuracy ? `±${Math.round(gpsAccuracy)} m` : '—'}</strong> GPS</span>
           </div>
 
-          {isAdding && <div className="tap-hint"><Crosshair size={18} /> Tap anywhere to add a {formatDistance(radius)} area</div>}
+          {isAdding && (
+            <div className="boundary-draw-bar">
+              <span><Crosshair size={17} /> Tap map corners · {draftPoints.length} points</span>
+              <button type="button" onClick={finishCustomBoundary} disabled={draftPoints.length < 3}>Finish</button>
+              <button type="button" onClick={() => { setIsAdding(false); setDraftPoints([]) }}>Cancel</button>
+            </div>
+          )}
           {gpsError && <div className="map-message"><X size={16} /><span>{gpsError}</span><button onClick={() => setGpsError('')}>Dismiss</button></div>}
 
           <div className="map-actions">

@@ -813,6 +813,34 @@ button {
 .zone-radius-number { height: 26px; }
 .zone-radius-number input { width: 42px; color: var(--zone-color); font-size: 10px; }
 
+.zone-boundary-summary {
+  padding-top: 9px;
+  margin-top: 9px;
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 7px;
+  border-top: 1px solid #eff1f3;
+}
+
+.boundary-status {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--zone-color);
+}
+
+.zone-boundary-summary strong {
+  color: #5d6976;
+  font-size: 9px;
+}
+
+.zone-boundary-summary small {
+  color: #929ca8;
+  font-size: 8px;
+}
+
 .history-summary {
   padding: 18px;
   display: flex;
@@ -1204,6 +1232,53 @@ button {
   box-shadow: 0 9px 25px rgba(15, 118, 110, 0.24);
 }
 
+.boundary-draw-bar {
+  padding: 8px 9px 8px 14px;
+  position: absolute;
+  z-index: 700;
+  top: 76px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 750;
+  white-space: nowrap;
+  border-radius: 12px;
+  background: #1a73e8;
+  box-shadow: 0 9px 28px rgba(26, 115, 232, 0.28);
+}
+
+.boundary-draw-bar span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.boundary-draw-bar button {
+  height: 30px;
+  padding: 0 10px;
+  color: #185abc;
+  font-size: 9px;
+  font-weight: 800;
+  border: 0;
+  border-radius: 7px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.boundary-draw-bar button:last-child {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.boundary-draw-bar button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .map-message {
   max-width: calc(100% - 40px);
   padding: 10px 12px;
@@ -1509,6 +1584,13 @@ button {
   .tracking-bar { display: none; }
   .leaflet-control-attribution { margin-bottom: 0 !important; }
   .tap-hint { top: 153px; max-width: calc(100% - 28px); overflow: hidden; text-overflow: ellipsis; }
+  .boundary-draw-bar {
+    width: calc(100% - 22px);
+    top: 112px;
+    justify-content: center;
+    box-sizing: border-box;
+  }
+  .boundary-draw-bar span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .map-message { top: 153px; }
 
   .mobile-nav {
