@@ -1471,16 +1471,12 @@ function App() {
               <GeoJSON
                 key={`gba-wards-2025-${isTerritoryMode ? 'selecting' : 'visible'}`}
                 data={officialWards}
-                style={(feature) => {
-                  const ward = feature as WardFeature
+                style={() => {
                   return {
-                    color: '#64748b',
-                    weight: isTerritoryMode ? 1.2 : 0.9,
-                    fillColor:
-                      TERRITORY_COLORS[
-                        ward.properties.color_index % TERRITORY_COLORS.length
-                      ],
-                    fillOpacity: isTerritoryMode ? 0.16 : 0.1,
+                    color: isTerritoryMode ? '#64748b' : '#94a3b8',
+                    weight: isTerritoryMode ? 1.15 : 0.8,
+                    fillColor: '#f8fafc',
+                    fillOpacity: isTerritoryMode ? 0.035 : 0.018,
                   }
                 }}
                 onEachFeature={(feature, layer) => {
@@ -1509,9 +1505,9 @@ function App() {
                   data={zone.geometry}
                   style={{
                     color: getZoneColor(zone, index),
-                    weight: 3,
+                    weight: 4,
                     fillColor: getZoneColor(zone, index),
-                    fillOpacity: 0.24,
+                    fillOpacity: 0.32,
                   }}
                   eventHandlers={{
                     click: (event) =>
