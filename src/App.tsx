@@ -507,6 +507,7 @@ function App() {
   const mapRef = useRef<LeafletMap | null>(null)
   const watchId = useRef<number | null>(null)
   const nativeWatchId = useRef<string | null>(null)
+  const lastZoneToggle = useRef<{ id: string; at: number } | null>(null)
   const gpsSamples = useRef<TrackPoint[]>([])
   const followUserRef = useRef(true)
   const pullStart = useRef<{ x: number; y: number } | null>(null)
@@ -780,7 +781,20 @@ function App() {
   const coveragePercent =
     coverage.total > 0 ? Math.round((coverage.covered / coverage.total) * 100) : 0
 
-  const toggleZoneVisibility = (zoneId: string, forceVisible?: boolean) => {
+  const toggleZoneVisibility = (
+    zoneId: string,
+    forceVisible?: boolean,
+    eventTimeStamp?: number,
+  ) => {
+    if (forceVisible === undefined && eventTimeStamp !== undefined) {
+      if (
+        lastZoneToggle.current?.id === zoneId &&
+        eventTimeStamp - lastZoneToggle.current.at < 350
+      ) {
+        return
+      }
+      lastZoneToggle.current = { id: zoneId, at: eventTimeStamp }
+    }
     setVisibleZoneIds((current) => {
       const next = new Set(current)
       const shouldShow = forceVisible ?? !next.has(zoneId)
@@ -800,7 +814,9 @@ function App() {
     const existing = activeProject.zones.find((zone) => zone.sourceLabel === sourceLabel)
     if (existing) {
       setFocus({ lat: existing.lat, lng: existing.lng, zoom: 14 })
-      toggleZoneVisibility(existing.id)
+      // Territory-map clicks select a boundary. Forcing it visible prevents a
+      // double-click from immediately toggling the same boundary off again.
+      toggleZoneVisibility(existing.id, true)
       return
     }
     const zoneId = uid()
@@ -1462,11 +1478,18 @@ function App() {
                   data={zone.geometry}
                   style={{
                     color: getZoneColor(zone, index),
-                    weight: 2,
+                    weight: 3,
                     fillColor: getZoneColor(zone, index),
-                    fillOpacity: 0.055,
+                    fillOpacity: 0.24,
                   }}
-                  eventHandlers={{ click: () => toggleZoneVisibility(zone.id) }}
+                  eventHandlers={{
+                    click: (event) =>
+                      toggleZoneVisibility(
+                        zone.id,
+                        undefined,
+                        event.originalEvent.timeStamp,
+                      ),
+                  }}
                 />
               )
             ))}
@@ -1571,8 +1594,8 @@ function App() {
                   type="button"
                   key={zone.id}
                   className={visibleZoneIds.has(zone.id) ? 'active' : ''}
-                  onClick={() => {
-                    toggleZoneVisibility(zone.id)
+                  onClick={(event) => {
+                    toggleZoneVisibility(zone.id, undefined, event.timeStamp)
                     setFocus({ lat: zone.lat, lng: zone.lng, zoom: 13 })
                   }}
                 >
