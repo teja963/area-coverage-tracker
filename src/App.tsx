@@ -1060,9 +1060,9 @@ function App() {
                 data={coverage.data}
                 style={(feature) => ({
                   color: feature?.properties.color,
-                  weight: feature?.properties.visited ? 0.8 : 0.35,
+                  weight: feature?.properties.visited ? 1.15 : 0.65,
                   fillColor: feature?.properties.color,
-                  fillOpacity: feature?.properties.visited ? 0.34 : 0.06,
+                  fillOpacity: feature?.properties.visited ? 0.5 : 0.13,
                   interactive: false,
                 })}
               />
@@ -1074,9 +1074,9 @@ function App() {
                 radius={zone.radius}
                 pathOptions={{
                   color: getZoneColor(zone, index),
-                  weight: 2.5,
+                  weight: 3,
                   fillColor: getZoneColor(zone, index),
-                  fillOpacity: 0.1,
+                  fillOpacity: 0.2,
                 }}
               >
                 <Tooltip sticky>{index + 1}. {zone.name} · {formatDistance(zone.radius)}</Tooltip>
@@ -1086,10 +1086,26 @@ function App() {
               <CircleMarker
                 key={`${zone.id}-point`}
                 center={[zone.lat, zone.lng]}
-                radius={12}
+                radius={10}
                 pathOptions={{ color: '#fff', weight: 3, fillColor: getZoneColor(zone, index), fillOpacity: 1 }}
               >
-                <Tooltip permanent direction="center" className="number-tooltip">{index + 1}</Tooltip>
+                <Tooltip
+                  permanent
+                  direction="top"
+                  offset={[0, -10]}
+                  className="area-label-tooltip"
+                >
+                  <div
+                    className="area-label-content"
+                    style={{ '--area-color': getZoneColor(zone, index) } as React.CSSProperties}
+                  >
+                    <span>{index + 1}</span>
+                    <div>
+                      <strong>{zone.name}</strong>
+                      <small>{formatDistance(zone.radius)} radius</small>
+                    </div>
+                  </div>
+                </Tooltip>
                 <Popup className="place-popup" minWidth={210}>
                   <div className="popup-place">
                     <span className="popup-number" style={{ background: getZoneColor(zone, index) }}>{index + 1}</span>

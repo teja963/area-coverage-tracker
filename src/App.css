@@ -882,6 +882,63 @@ button {
 
 .number-tooltip::before { display: none !important; }
 
+.area-label-tooltip {
+  padding: 0 !important;
+  overflow: hidden;
+  border: 0 !important;
+  border-radius: 10px !important;
+  background: rgba(255, 255, 255, 0.96) !important;
+  box-shadow: 0 5px 16px rgba(31, 41, 55, 0.2) !important;
+}
+
+.area-label-tooltip::before {
+  border-top-color: rgba(255, 255, 255, 0.96) !important;
+}
+
+.area-label-content {
+  min-width: 120px;
+  padding: 7px 10px 7px 7px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-left: 4px solid var(--area-color);
+}
+
+.area-label-content > span {
+  width: 23px;
+  height: 23px;
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 800;
+  border-radius: 50%;
+  background: var(--area-color);
+}
+
+.area-label-content > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.area-label-content strong {
+  max-width: 135px;
+  overflow: hidden;
+  color: #26313e;
+  font-size: 10px;
+  line-height: 1.25;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.area-label-content small {
+  color: var(--area-color);
+  font-size: 8px;
+  font-weight: 750;
+}
+
 .place-popup .leaflet-popup-content-wrapper {
   border-radius: 14px;
   box-shadow: 0 12px 34px rgba(30, 39, 52, 0.18);
