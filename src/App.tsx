@@ -190,6 +190,31 @@ function MapController({
   return null
 }
 
+function TrackpadPan() {
+  const map = useMap()
+
+  useEffect(() => {
+    const container = map.getContainer()
+    const handleWheel = (event: WheelEvent) => {
+      const horizontalDelta =
+        Math.abs(event.deltaX) > 1 ? event.deltaX : event.shiftKey ? event.deltaY : 0
+      const isHorizontalGesture =
+        event.shiftKey || Math.abs(event.deltaX) > Math.abs(event.deltaY) * 0.7
+
+      if (!horizontalDelta || !isHorizontalGesture) return
+
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      map.panBy([horizontalDelta, 0], { animate: false })
+    }
+
+    container.addEventListener('wheel', handleWheel, { passive: false, capture: true })
+    return () => container.removeEventListener('wheel', handleWheel, { capture: true })
+  }, [map])
+
+  return null
+}
+
 function App() {
   const [projects, setProjects] = useState<Project[]>(loadProjects)
   const [activeId, setActiveId] = useState(() => {
@@ -870,6 +895,7 @@ function App() {
               className="base-map-tiles"
             />
             <MapController focus={focus} mapRef={mapRef} />
+            <TrackpadPan />
             <MapClickHandler enabled={isAdding} onAdd={addZone} />
             {coverage.data && (
               <GeoJSON
@@ -963,7 +989,7 @@ function App() {
               <LocateFixed size={19} />
             </button>
           </div>
-          <div className="pan-hint">Drag freely to move · Pinch or scroll to zoom</div>
+          <div className="pan-hint">Two-finger swipe to move · Pinch or scroll to zoom</div>
 
           <div className="tracking-bar">
             <div>
