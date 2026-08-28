@@ -62,7 +62,7 @@ type Project = {
 }
 
 type SearchResult = {
-  place_id: number
+  place_id: string
   display_name: string
   lat: string
   lon: string
@@ -111,6 +111,50 @@ function loadProjects(): Project[] {
     // Start clean if old local data is invalid.
   }
   return [newProject()]
+}
+
+async function findPlaces(term: string, signal?: AbortSignal): Promise<SearchResult[]> {
+  const params = new URLSearchParams({
+    q: term,
+    limit: '6',
+    lat: '12.917',
+    lon: '77.610',
+  })
+  const response = await fetch(`https://photon.komoot.io/api/?${params}`, { signal })
+  if (!response.ok) throw new Error('Search unavailable')
+
+  const data = (await response.json()) as {
+    features: Array<{
+      properties: Record<string, string | number | undefined>
+      geometry: { coordinates: [number, number] }
+    }>
+  }
+
+  return data.features.map((feature) => {
+    const place = feature.properties
+    const name =
+      String(place.name || '').trim() ||
+      [place.housenumber, place.street].filter(Boolean).join(' ') ||
+      'Unnamed place'
+    const context = [
+      place.street,
+      place.district,
+      place.city,
+      place.county,
+      place.state,
+      place.country,
+    ]
+      .filter((part, index, parts) => part && part !== name && parts.indexOf(part) === index)
+      .join(', ')
+
+    return {
+      place_id: `${place.osm_type}-${place.osm_id}-${feature.geometry.coordinates.join('-')}`,
+      display_name: context ? `${name}, ${context}` : name,
+      lat: String(feature.geometry.coordinates[1]),
+      lon: String(feature.geometry.coordinates[0]),
+      type: String(place.type || place.osm_value || 'place'),
+    }
+  })
 }
 
 function distanceMeters(a: Pick<TrackPoint, 'lat' | 'lng'>, b: Pick<TrackPoint, 'lat' | 'lng'>) {
@@ -311,6 +355,31 @@ function App() {
     }
   }, [])
 
+  useEffect(() => {
+    const term = query.trim()
+    if (term.length < 2) return
+
+    const controller = new AbortController()
+    const timer = window.setTimeout(async () => {
+      setIsSearching(true)
+      setSearchError('')
+      try {
+        setResults(await findPlaces(term, controller.signal))
+      } catch (error) {
+        if (!(error instanceof DOMException && error.name === 'AbortError')) {
+          setSearchError('Suggestions are temporarily unavailable. You can tap the map instead.')
+        }
+      } finally {
+        if (!controller.signal.aborted) setIsSearching(false)
+      }
+    }, 350)
+
+    return () => {
+      window.clearTimeout(timer)
+      controller.abort()
+    }
+  }, [query])
+
   const routeDistance = useMemo(
     () =>
       activeProject.track.reduce(
@@ -434,26 +503,18 @@ function App() {
     }))
     setFocus({ lat, lng, zoom: 14 })
     setIsAdding(false)
+    setQuery('')
     setResults([])
     setTab('areas')
   }
 
   const searchPlaces = async (event: React.FormEvent) => {
     event.preventDefault()
-    if (query.trim().length < 3) return
-    setTab('areas')
+    if (query.trim().length < 2) return
     setIsSearching(true)
     setSearchError('')
     try {
-      const params = new URLSearchParams({
-        q: query.trim(),
-        format: 'jsonv2',
-        limit: '5',
-        addressdetails: '1',
-      })
-      const response = await fetch(`https://nominatim.openstreetmap.org/search?${params}`)
-      if (!response.ok) throw new Error('Search unavailable')
-      setResults((await response.json()) as SearchResult[])
+      setResults(await findPlaces(query.trim()))
     } catch {
       setSearchError('Place search is temporarily unavailable. You can tap the map instead.')
     } finally {
@@ -731,9 +792,13 @@ function App() {
                     <Search size={18} />
                     <input
                       value={query}
-                      onChange={(event) => setQuery(event.target.value)}
+                      onChange={(event) => {
+                        setQuery(event.target.value)
+                        if (event.target.value.trim().length < 2) setResults([])
+                      }}
                       placeholder="Search any place..."
                       aria-label="Search any place"
+                      autoComplete="off"
                     />
                     {query && (
                       <button type="button" onClick={() => { setQuery(''); setResults([]) }} aria-label="Clear search">
@@ -1050,8 +1115,43 @@ function App() {
 
           <form className="map-search" onSubmit={searchPlaces}>
             <Search size={19} />
-            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search a place" />
+            <input
+              value={query}
+              onChange={(event) => {
+                setQuery(event.target.value)
+                if (event.target.value.trim().length < 2) setResults([])
+              }}
+              placeholder="Search a place"
+              autoComplete="off"
+            />
           </form>
+          {tab === 'map' && query.trim().length >= 2 && (
+            <div className="map-suggestions">
+              {isSearching && results.length === 0 && (
+                <div className="suggestion-status">Finding nearby places…</div>
+              )}
+              {results.map((result) => (
+                <button
+                  type="button"
+                  key={result.place_id}
+                  onClick={() =>
+                    addZone(
+                      Number(result.lat),
+                      Number(result.lon),
+                      result.display_name.split(',')[0],
+                    )
+                  }
+                >
+                  <span className="suggestion-icon"><MapPin size={16} /></span>
+                  <span>
+                    <strong>{result.display_name.split(',')[0]}</strong>
+                    <small>{result.display_name.split(',').slice(1).join(',').trim()}</small>
+                  </span>
+                </button>
+              ))}
+              {searchError && <div className="suggestion-status error">{searchError}</div>}
+            </div>
+          )}
 
           <div className="mobile-map-stats">
             <span><strong>{coveragePercent}%</strong> covered</span>
