@@ -263,21 +263,32 @@ function MapController({
 
 function TrackpadPan({ onManualMove }: { onManualMove: () => void }) {
   const map = useMap()
+  const zoomAccumulator = useRef(0)
 
   useEffect(() => {
     const container = map.getContainer()
     const handleWheel = (event: WheelEvent) => {
-      const horizontalDelta =
-        Math.abs(event.deltaX) > 1 ? event.deltaX : event.shiftKey ? event.deltaY : 0
       const isHorizontalGesture =
         event.shiftKey || Math.abs(event.deltaX) > Math.abs(event.deltaY) * 0.7
-
-      if (!horizontalDelta || !isHorizontalGesture) return
+      const horizontalDelta = event.shiftKey ? event.deltaY : event.deltaX
 
       event.preventDefault()
       event.stopImmediatePropagation()
-      onManualMove()
-      map.panBy([horizontalDelta, 0], { animate: false })
+
+      if (isHorizontalGesture && Math.abs(horizontalDelta) > 0.5) {
+        zoomAccumulator.current = 0
+        onManualMove()
+        map.panBy([horizontalDelta, 0], { animate: false })
+        return
+      }
+
+      zoomAccumulator.current += event.deltaY
+      if (Math.abs(zoomAccumulator.current) < 40) return
+
+      const zoomDirection = zoomAccumulator.current < 0 ? 1 : -1
+      const pointer = map.mouseEventToContainerPoint(event)
+      map.setZoomAround(pointer, map.getZoom() + zoomDirection)
+      zoomAccumulator.current = 0
     }
 
     container.addEventListener('wheel', handleWheel, { passive: false, capture: true })
@@ -1024,7 +1035,7 @@ function App() {
             center={BENGALURU}
             zoom={13}
             zoomControl={false}
-            scrollWheelZoom
+            scrollWheelZoom={false}
             touchZoom
             dragging
             preferCanvas
