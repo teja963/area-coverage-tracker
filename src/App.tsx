@@ -90,6 +90,7 @@ type WardFeature = {
     corporation: string
     assembly: string
     source: string
+    color_index: number
   }
   geometry: BoundaryGeometry
 }
@@ -120,6 +121,7 @@ const AREA_COLORS = [
   '#ef4444',
   '#0891b2',
 ]
+const TERRITORY_COLORS = ['#3b82f6', '#f97316', '#22c55e', '#8b5cf6', '#f43f5e']
 
 const uid = () => crypto.randomUUID()
 
@@ -242,7 +244,7 @@ const BENGALURU_TARGETS = [
 
 function officialStarterZones(collection: WardFeatureCollection) {
   const selected = new Set<string>()
-  return BENGALURU_TARGETS.flatMap((target, index) => {
+  return BENGALURU_TARGETS.flatMap((target) => {
     const ward = wardAtPoint(collection, target.lat, target.lng)
     if (!ward || selected.has(ward.properties.ward_id)) return []
     selected.add(ward.properties.ward_id)
@@ -252,7 +254,7 @@ function officialStarterZones(collection: WardFeatureCollection) {
       lat: target.lat,
       lng: target.lng,
       geometry: ward.geometry,
-      color: AREA_COLORS[index % AREA_COLORS.length],
+      color: TERRITORY_COLORS[ward.properties.color_index % TERRITORY_COLORS.length],
       source: 'gba' as const,
       sourceLabel: `Official GBA Ward ${ward.properties.ward_id}`,
     }]
@@ -541,6 +543,26 @@ function App() {
     loadOfficialWards()
       .then((collection) => {
         setOfficialWards(collection)
+        const colorsBySource = new Map(
+          collection.features.map((ward) => [
+            `Official GBA Ward ${ward.properties.ward_id}`,
+            TERRITORY_COLORS[ward.properties.color_index % TERRITORY_COLORS.length],
+          ]),
+        )
+        setProjects((current) =>
+          current.map((project) => {
+            let changed = false
+            const zones = project.zones.map((zone) => {
+              const color = zone.sourceLabel
+                ? colorsBySource.get(zone.sourceLabel)
+                : undefined
+              if (!color || color === zone.color) return zone
+              changed = true
+              return { ...zone, color }
+            })
+            return changed ? { ...project, zones } : project
+          }),
+        )
         if (localStorage.getItem(OFFICIAL_STARTER_KEY)) return
         setProjects((current) => {
           if (current.some((project) => project.zones.length > 0)) return current
@@ -833,7 +855,8 @@ function App() {
           lat,
           lng,
           geometry: ward.geometry,
-          color: AREA_COLORS[project.zones.length % AREA_COLORS.length],
+          color:
+            TERRITORY_COLORS[ward.properties.color_index % TERRITORY_COLORS.length],
           source: 'gba',
           sourceLabel,
         },
@@ -1444,15 +1467,21 @@ function App() {
             <MapController focus={focus} mapRef={mapRef} />
             <TrackpadPan onManualMove={() => setFollowUser(false)} />
             <MapInteractionHandler onManualMove={() => setFollowUser(false)} />
-            {isTerritoryMode && officialWards && (
+            {!isTracking && officialWards && (
               <GeoJSON
-                key="gba-wards-2025"
+                key={`gba-wards-2025-${isTerritoryMode ? 'selecting' : 'visible'}`}
                 data={officialWards}
-                style={{
-                  color: '#64748b',
-                  weight: 0.8,
-                  fillColor: '#f8fafc',
-                  fillOpacity: 0.018,
+                style={(feature) => {
+                  const ward = feature as WardFeature
+                  return {
+                    color: '#64748b',
+                    weight: isTerritoryMode ? 1.2 : 0.9,
+                    fillColor:
+                      TERRITORY_COLORS[
+                        ward.properties.color_index % TERRITORY_COLORS.length
+                      ],
+                    fillOpacity: isTerritoryMode ? 0.16 : 0.1,
+                  }
                 }}
                 onEachFeature={(feature, layer) => {
                   const ward = feature as WardFeature
@@ -1460,13 +1489,15 @@ function App() {
                     `Ward ${ward.properties.ward_id} · ${ward.properties.ward_name}`,
                     { sticky: true, direction: 'top' },
                   )
-                  layer.on('click', (event) =>
-                    addOfficialWard(
-                      ward,
-                      event.latlng.lat,
-                      event.latlng.lng,
-                    ),
-                  )
+                  if (isTerritoryMode) {
+                    layer.on('click', (event) =>
+                      addOfficialWard(
+                        ward,
+                        event.latlng.lat,
+                        event.latlng.lng,
+                      ),
+                    )
+                  }
                 }}
               />
             )}
