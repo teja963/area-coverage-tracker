@@ -37,3 +37,22 @@ npm run preview
 
 Deploy `dist` to an HTTPS static host. Cloudflare Pages, GitHub Pages, Netlify,
 and Vercel have free plans. Then use “Add to Home Screen” in the phone browser.
+
+## Android background tracking
+
+Install `Coverly.apk` once to enable Android foreground-service GPS. Starting
+tracking displays Android's required persistent notification and continues
+collecting route points while another app is open.
+
+The APK loads the HTTPS web app, so future map, UI, boundary, and JavaScript
+tracking changes update automatically when Coverly is reopened. Native Android
+permission or plugin changes still require a newly built APK.
+
+Build the APK with:
+
+```bash
+npm run build
+npx cap sync android
+cd android
+./gradlew assembleDebug
+```

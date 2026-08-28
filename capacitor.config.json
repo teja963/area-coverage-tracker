@@ -1,0 +1,12 @@
+{
+  "appId": "com.teja963.coverly",
+  "appName": "Coverly",
+  "webDir": "dist",
+  "server": {
+    "url": "https://teja963.github.io/area-coverage-tracker/",
+    "cleartext": false
+  },
+  "android": {
+    "useLegacyBridge": true
+  }
+}

@@ -1,4 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { Capacitor, registerPlugin } from '@capacitor/core'
+import { LocalNotifications } from '@capacitor/local-notifications'
+import type { BackgroundGeolocationPlugin } from '@capacitor-community/background-geolocation'
 import {
   Circle,
   CircleMarker,
@@ -35,6 +38,9 @@ import {
 } from 'lucide-react'
 import 'leaflet/dist/leaflet.css'
 import './App.css'
+
+const NativeBackgroundGeolocation =
+  registerPlugin<BackgroundGeolocationPlugin>('BackgroundGeolocation')
 
 type Zone = {
   id: string
@@ -500,6 +506,7 @@ function App() {
   const [isRefreshing, setIsRefreshing] = useState(false)
   const mapRef = useRef<LeafletMap | null>(null)
   const watchId = useRef<number | null>(null)
+  const nativeWatchId = useRef<string | null>(null)
   const gpsSamples = useRef<TrackPoint[]>([])
   const followUserRef = useRef(true)
   const pullStart = useRef<{ x: number; y: number } | null>(null)
@@ -562,6 +569,9 @@ function App() {
   useEffect(() => {
     return () => {
       if (watchId.current !== null) navigator.geolocation.clearWatch(watchId.current)
+      if (nativeWatchId.current !== null) {
+        void NativeBackgroundGeolocation.removeWatcher({ id: nativeWatchId.current })
+      }
     }
   }, [])
 
@@ -917,10 +927,51 @@ function App() {
     )
   }
 
+  const recordGpsPoint = (rawPoint: TrackPoint, speed: number | null) => {
+    setLivePoint(rawPoint)
+    setGpsAccuracy(rawPoint.accuracy)
+    setLiveSpeed(speed)
+
+    if (rawPoint.accuracy > 60) return
+
+    if (followUserRef.current && mapRef.current) {
+      mapRef.current.setView(
+        [rawPoint.lat, rawPoint.lng],
+        Math.max(mapRef.current.getZoom(), 16),
+        { animate: true },
+      )
+    }
+
+    gpsSamples.current = [...gpsSamples.current.slice(-3), rawPoint]
+    const nextPoint = smoothGpsSamples(gpsSamples.current)
+    setProjects((current) =>
+      current.map((project) => {
+        if (project.id !== activeId) return project
+        const previous = project.track[project.track.length - 1]
+        if (
+          previous &&
+          distanceMeters(previous, nextPoint) < 2 &&
+          rawPoint.timestamp - previous.timestamp < 4000
+        ) {
+          return project
+        }
+        return {
+          ...project,
+          track: [...project.track, nextPoint],
+          updatedAt: Date.now(),
+        }
+      }),
+    )
+  }
+
   const stopTracking = () => {
     if (watchId.current !== null) {
       navigator.geolocation.clearWatch(watchId.current)
       watchId.current = null
+    }
+    if (nativeWatchId.current !== null) {
+      void NativeBackgroundGeolocation.removeWatcher({ id: nativeWatchId.current })
+      nativeWatchId.current = null
     }
     setIsTracking(false)
     gpsSamples.current = []
@@ -936,8 +987,9 @@ function App() {
     setLiveSpeed(null)
   }
 
-  const startTracking = () => {
-    if (!navigator.geolocation) {
+  const startTracking = async () => {
+    const isNative = Capacitor.isNativePlatform()
+    if (!isNative && !navigator.geolocation) {
       setGpsError('GPS is not supported by this browser.')
       return
     }
@@ -948,47 +1000,67 @@ function App() {
     setVisibleZoneIds(new Set())
     setGpsAccuracy(null)
     gpsSamples.current = []
+
+    if (isNative) {
+      try {
+        if (Capacitor.getPlatform() === 'android') {
+          const notificationPermission = await LocalNotifications.checkPermissions()
+          if (notificationPermission.display !== 'granted') {
+            const requested = await LocalNotifications.requestPermissions()
+            if (requested.display !== 'granted') {
+              throw new Error('Notification permission is required for background tracking.')
+            }
+          }
+        }
+        nativeWatchId.current = await NativeBackgroundGeolocation.addWatcher(
+          {
+            backgroundTitle: 'Coverly is tracking your route',
+            backgroundMessage: 'Background GPS is active. Tap to return to the map.',
+            requestPermissions: true,
+            stale: false,
+            distanceFilter: 2,
+          },
+          (location, error) => {
+            if (error) {
+              setGpsError(
+                error.code === 'NOT_AUTHORIZED'
+                  ? 'Allow precise location in Android settings to track your route.'
+                  : error.message || 'Background GPS tracking stopped.',
+              )
+              setIsTracking(false)
+              return
+            }
+            if (!location) return
+            recordGpsPoint(
+              {
+                lat: location.latitude,
+                lng: location.longitude,
+                accuracy: location.accuracy,
+                timestamp: location.time ?? Date.now(),
+              },
+              location.speed,
+            )
+          },
+        )
+      } catch (error) {
+        setIsTracking(false)
+        setGpsError(
+          error instanceof Error ? error.message : 'Could not start Android background GPS.',
+        )
+      }
+      return
+    }
+
     watchId.current = navigator.geolocation.watchPosition(
       ({ coords, timestamp }) => {
-        const rawPoint: TrackPoint = {
-          lat: coords.latitude,
-          lng: coords.longitude,
-          accuracy: coords.accuracy,
-          timestamp,
-        }
-        setLivePoint(rawPoint)
-        setGpsAccuracy(coords.accuracy)
-        setLiveSpeed(coords.speed)
-
-        if (coords.accuracy > 60) return
-
-        if (followUserRef.current && mapRef.current) {
-          mapRef.current.setView(
-            [coords.latitude, coords.longitude],
-            Math.max(mapRef.current.getZoom(), 16),
-            { animate: true },
-          )
-        }
-
-        gpsSamples.current = [...gpsSamples.current.slice(-3), rawPoint]
-        const nextPoint = smoothGpsSamples(gpsSamples.current)
-        setProjects((current) =>
-          current.map((project) => {
-            if (project.id !== activeId) return project
-            const previous = project.track[project.track.length - 1]
-            if (
-              previous &&
-              distanceMeters(previous, nextPoint) < 2 &&
-              timestamp - previous.timestamp < 4000
-            ) {
-              return project
-            }
-            return {
-              ...project,
-              track: [...project.track, nextPoint],
-              updatedAt: Date.now(),
-            }
-          }),
+        recordGpsPoint(
+          {
+            lat: coords.latitude,
+            lng: coords.longitude,
+            accuracy: coords.accuracy,
+            timestamp,
+          },
+          coords.speed,
         )
       },
       (error) => {

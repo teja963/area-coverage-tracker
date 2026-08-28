@@ -1,4 +1,4 @@
-const CACHE_NAME = 'coverly-shell-v5'
+const CACHE_NAME = 'coverly-shell-v6'
 const BASE_PATH = new URL(self.registration.scope).pathname
 const APP_SHELL = [BASE_PATH, `${BASE_PATH}manifest.webmanifest`, `${BASE_PATH}app-icon.svg`]
 
