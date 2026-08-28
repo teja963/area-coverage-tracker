@@ -1022,8 +1022,8 @@ button {
   color: #fff;
   border: 0;
   border-radius: 11px;
-  background: #0f766e;
-  box-shadow: 0 7px 20px rgba(15, 80, 76, 0.2);
+  background: #1a73e8;
+  box-shadow: 0 7px 20px rgba(26, 115, 232, 0.22);
   cursor: pointer;
 }
 
@@ -1041,6 +1041,12 @@ button {
   background: rgba(255, 255, 255, 0.97);
 }
 
+.locate-button.active {
+  color: #1a73e8;
+  border-color: #b9d4f8;
+  background: #eef5ff;
+}
+
 .pan-hint {
   padding: 6px 10px;
   position: absolute;
@@ -1056,7 +1062,7 @@ button {
 }
 
 .tracking-bar {
-  width: min(480px, calc(100% - 42px));
+  width: min(620px, calc(100% - 42px));
   min-height: 65px;
   padding: 9px 10px 9px 16px;
   position: absolute;
@@ -1105,6 +1111,31 @@ button {
   text-overflow: ellipsis;
 }
 
+.live-metrics {
+  margin-left: auto;
+  display: flex;
+  gap: 5px !important;
+}
+
+.live-metrics > span {
+  min-width: 57px;
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  border-radius: 9px;
+  background: #f1f5f9;
+}
+
+.live-metrics strong {
+  color: #1a73e8;
+  font-size: 11px;
+}
+
+.live-metrics small {
+  font-size: 7px;
+}
+
 .start-button,
 .stop-button {
   min-width: 128px;
@@ -1123,8 +1154,8 @@ button {
 }
 
 .start-button {
-  background: linear-gradient(135deg, #0f766e, #115e59);
-  box-shadow: 0 7px 16px rgba(15, 118, 110, 0.22);
+  background: linear-gradient(135deg, #1a73e8, #185abc);
+  box-shadow: 0 7px 16px rgba(26, 115, 232, 0.24);
 }
 
 .stop-button {
@@ -1271,8 +1302,8 @@ button {
     place-self: center;
     color: #fff;
     border-radius: 50%;
-    background: #0f766e;
-    box-shadow: 0 6px 18px rgba(15, 118, 110, 0.28);
+    background: #1a73e8;
+    box-shadow: 0 6px 18px rgba(26, 115, 232, 0.3);
   }
   .mobile-nav .mobile-track.active { color: #fff; background: #d94c59; }
 }

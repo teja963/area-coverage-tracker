@@ -158,16 +158,43 @@ function getZoneColor(zone: Zone, index: number) {
   return zone.color ?? AREA_COLORS[index % AREA_COLORS.length]
 }
 
+function smoothGpsSamples(samples: TrackPoint[]): TrackPoint {
+  const totalWeight = samples.reduce(
+    (sum, point) => sum + 1 / Math.max(25, point.accuracy ** 2),
+    0,
+  )
+  const latest = samples[samples.length - 1]
+  return {
+    lat:
+      samples.reduce(
+        (sum, point) => sum + point.lat / Math.max(25, point.accuracy ** 2),
+        0,
+      ) / totalWeight,
+    lng:
+      samples.reduce(
+        (sum, point) => sum + point.lng / Math.max(25, point.accuracy ** 2),
+        0,
+      ) / totalWeight,
+    accuracy: latest.accuracy,
+    timestamp: latest.timestamp,
+  }
+}
+
 function MapClickHandler({
   enabled,
   onAdd,
+  onManualMove,
 }: {
   enabled: boolean
   onAdd: (lat: number, lng: number) => void
+  onManualMove: () => void
 }) {
   useMapEvents({
     click(event) {
       if (enabled) onAdd(event.latlng.lat, event.latlng.lng)
+    },
+    dragstart() {
+      onManualMove()
     },
   })
   return null
@@ -190,7 +217,7 @@ function MapController({
   return null
 }
 
-function TrackpadPan() {
+function TrackpadPan({ onManualMove }: { onManualMove: () => void }) {
   const map = useMap()
 
   useEffect(() => {
@@ -205,12 +232,13 @@ function TrackpadPan() {
 
       event.preventDefault()
       event.stopImmediatePropagation()
+      onManualMove()
       map.panBy([horizontalDelta, 0], { animate: false })
     }
 
     container.addEventListener('wheel', handleWheel, { passive: false, capture: true })
     return () => container.removeEventListener('wheel', handleWheel, { capture: true })
-  }, [map])
+  }, [map, onManualMove])
 
   return null
 }
@@ -223,6 +251,10 @@ function App() {
   })
   const [tab, setTab] = useState<Tab>('map')
   const [isTracking, setIsTracking] = useState(false)
+  const [followUser, setFollowUser] = useState(true)
+  const [livePoint, setLivePoint] = useState<TrackPoint | null>(null)
+  const [gpsAccuracy, setGpsAccuracy] = useState<number | null>(null)
+  const [liveSpeed, setLiveSpeed] = useState<number | null>(null)
   const [isAdding, setIsAdding] = useState(false)
   const [radius, setRadius] = useState(1000)
   const [query, setQuery] = useState('')
@@ -236,6 +268,8 @@ function App() {
   const [showProjectMenu, setShowProjectMenu] = useState(false)
   const mapRef = useRef<LeafletMap | null>(null)
   const watchId = useRef<number | null>(null)
+  const gpsSamples = useRef<TrackPoint[]>([])
+  const followUserRef = useRef(true)
 
   const activeProject = projects.find((project) => project.id === activeId) ?? projects[0]
 
@@ -260,6 +294,10 @@ function App() {
   useEffect(() => {
     localStorage.setItem(ACTIVE_PROJECT_KEY, activeId)
   }, [activeId])
+
+  useEffect(() => {
+    followUserRef.current = followUser
+  }, [followUser])
 
   useEffect(() => {
     navigator.storage?.persist?.().catch(() => {
@@ -430,7 +468,17 @@ function App() {
     }
     setGpsError('')
     navigator.geolocation.getCurrentPosition(
-      ({ coords }) => {
+      ({ coords, timestamp }) => {
+        const point = {
+          lat: coords.latitude,
+          lng: coords.longitude,
+          accuracy: coords.accuracy,
+          timestamp,
+        }
+        setLivePoint(point)
+        setGpsAccuracy(coords.accuracy)
+        setLiveSpeed(coords.speed)
+        setFollowUser(true)
         setFocus({ lat: coords.latitude, lng: coords.longitude, zoom: 16 })
         if (addAsZone) addZone(coords.latitude, coords.longitude, 'My location')
       },
@@ -445,6 +493,7 @@ function App() {
       watchId.current = null
     }
     setIsTracking(false)
+    gpsSamples.current = []
   }
 
   const startTracking = () => {
@@ -454,14 +503,33 @@ function App() {
     }
     setGpsError('')
     setIsTracking(true)
+    setFollowUser(true)
+    setGpsAccuracy(null)
+    gpsSamples.current = []
     watchId.current = navigator.geolocation.watchPosition(
       ({ coords, timestamp }) => {
-        const nextPoint: TrackPoint = {
+        const rawPoint: TrackPoint = {
           lat: coords.latitude,
           lng: coords.longitude,
           accuracy: coords.accuracy,
           timestamp,
         }
+        setLivePoint(rawPoint)
+        setGpsAccuracy(coords.accuracy)
+        setLiveSpeed(coords.speed)
+
+        if (coords.accuracy > 60) return
+
+        if (followUserRef.current && mapRef.current) {
+          mapRef.current.setView(
+            [coords.latitude, coords.longitude],
+            Math.max(mapRef.current.getZoom(), 16),
+            { animate: true },
+          )
+        }
+
+        gpsSamples.current = [...gpsSamples.current.slice(-3), rawPoint]
+        const nextPoint = smoothGpsSamples(gpsSamples.current)
         setProjects((current) =>
           current.map((project) => {
             if (project.id !== activeId) return project
@@ -480,13 +548,12 @@ function App() {
             }
           }),
         )
-        setFocus({ lat: coords.latitude, lng: coords.longitude })
       },
       (error) => {
         setGpsError(error.message || 'GPS tracking stopped.')
         stopTracking()
       },
-      { enableHighAccuracy: true, maximumAge: 2000, timeout: 20000 },
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 30000 },
     )
   }
 
@@ -515,7 +582,17 @@ function App() {
     point.lat,
     point.lng,
   ])
-  const currentPoint = activeProject.track[activeProject.track.length - 1]
+  const currentPoint = livePoint ?? activeProject.track[activeProject.track.length - 1]
+  const gpsQuality =
+    gpsAccuracy === null
+      ? 'Acquiring GPS'
+      : gpsAccuracy <= 15
+        ? 'High accuracy'
+        : gpsAccuracy <= 35
+          ? 'Good accuracy'
+          : gpsAccuracy <= 60
+            ? 'Fair accuracy'
+            : 'Weak GPS — waiting'
 
   return (
     <main className="app-shell">
@@ -895,8 +972,12 @@ function App() {
               className="base-map-tiles"
             />
             <MapController focus={focus} mapRef={mapRef} />
-            <TrackpadPan />
-            <MapClickHandler enabled={isAdding} onAdd={addZone} />
+            <TrackpadPan onManualMove={() => setFollowUser(false)} />
+            <MapClickHandler
+              enabled={isAdding}
+              onAdd={addZone}
+              onManualMove={() => setFollowUser(false)}
+            />
             {coverage.data && (
               <GeoJSON
                 key={`${activeProject.id}-${coverage.total}-${coverage.covered}-${coverage.cellSize}`}
@@ -955,7 +1036,7 @@ function App() {
               <>
                 <Circle
                   center={[currentPoint.lat, currentPoint.lng]}
-                  radius={Math.max(8, currentPoint.accuracy)}
+                  radius={Math.min(200, Math.max(8, currentPoint.accuracy))}
                   pathOptions={{ color: '#2385f5', weight: 1, fillColor: '#2385f5', fillOpacity: 0.1 }}
                 />
                 <CircleMarker
@@ -975,7 +1056,7 @@ function App() {
           <div className="mobile-map-stats">
             <span><strong>{coveragePercent}%</strong> covered</span>
             <span><strong>{formatDistance(routeDistance)}</strong> travelled</span>
-            <span><strong>{activeProject.zones.length}</strong> areas</span>
+            <span><strong>{gpsAccuracy ? `±${Math.round(gpsAccuracy)} m` : '—'}</strong> GPS</span>
           </div>
 
           {isAdding && <div className="tap-hint"><Crosshair size={18} /> Tap anywhere to add a {formatDistance(radius)} area</div>}
@@ -985,17 +1066,44 @@ function App() {
             <button type="button" className="add-area-button" onClick={() => setTab('areas')}>
               <Plus size={18} /> Add search area
             </button>
-            <button type="button" className="locate-button" onClick={() => locateMe()} aria-label="Locate me">
+            <button
+              type="button"
+              className={`locate-button ${followUser ? 'active' : ''}`}
+              onClick={() => {
+                setFollowUser(true)
+                if (currentPoint) {
+                  setFocus({ lat: currentPoint.lat, lng: currentPoint.lng, zoom: 17 })
+                } else {
+                  locateMe()
+                }
+              }}
+              aria-label="Follow my location"
+            >
               <LocateFixed size={19} />
             </button>
           </div>
           <div className="pan-hint">Two-finger swipe to move · Pinch or scroll to zoom</div>
 
           <div className="tracking-bar">
-            <div>
+            <div className="gps-readout">
               <span className={`tracking-dot ${isTracking ? 'active' : ''}`} />
-              <span><strong>{isTracking ? 'Recording your route' : 'Ready to track'}</strong><small>{isTracking ? 'Keep this app open while travelling' : 'GPS points save automatically'}</small></span>
+              <span>
+                <strong>{isTracking ? gpsQuality : 'Ready to navigate'}</strong>
+                <small>
+                  {isTracking
+                    ? gpsAccuracy && gpsAccuracy > 60
+                      ? 'Move outdoors and enable Precise Location'
+                      : 'Following your position · route saves automatically'
+                    : 'Enable precise GPS, then start tracking'}
+                </small>
+              </span>
             </div>
+            {isTracking && (
+              <div className="live-metrics">
+                <span><strong>{gpsAccuracy ? `±${Math.round(gpsAccuracy)} m` : '—'}</strong><small>Accuracy</small></span>
+                <span><strong>{liveSpeed === null ? '—' : Math.round(liveSpeed * 3.6)}</strong><small>km/h</small></span>
+              </div>
+            )}
             <button
               type="button"
               className={isTracking ? 'stop-button' : 'start-button'}
