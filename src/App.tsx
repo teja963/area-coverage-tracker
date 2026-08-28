@@ -26,6 +26,7 @@ import {
   Pause,
   Play,
   RefreshCw,
+  RotateCcw,
   Route,
   Search,
   Square,
@@ -484,6 +485,8 @@ function App() {
   const [isResolvingBoundary, setIsResolvingBoundary] = useState(false)
   const [officialWards, setOfficialWards] = useState<WardFeatureCollection | null>(null)
   const [officialBoundaryError, setOfficialBoundaryError] = useState(false)
+  const [visibleZoneIds, setVisibleZoneIds] = useState<Set<string>>(() => new Set())
+  const [isTerritoryMode, setIsTerritoryMode] = useState(false)
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<SearchResult[]>([])
   const [isSearching, setIsSearching] = useState(false)
@@ -561,6 +564,30 @@ function App() {
       if (watchId.current !== null) navigator.geolocation.clearWatch(watchId.current)
     }
   }, [])
+
+  useEffect(() => {
+    if (!isTracking || !navigator.wakeLock) return
+    let released = false
+    let lock: WakeLockSentinel | null = null
+    const acquire = async () => {
+      if (released || document.visibilityState !== 'visible') return
+      try {
+        lock = await navigator.wakeLock.request('screen')
+      } catch {
+        // Tracking still works while the browser keeps the page active.
+      }
+    }
+    const restore = () => {
+      if (document.visibilityState === 'visible') void acquire()
+    }
+    void acquire()
+    document.addEventListener('visibilitychange', restore)
+    return () => {
+      released = true
+      document.removeEventListener('visibilitychange', restore)
+      void lock?.release()
+    }
+  }, [isTracking])
 
   useEffect(() => {
     const beginPull = (event: TouchEvent) => {
@@ -655,7 +682,7 @@ function App() {
 
   const coverage = useMemo(() => {
     if (!activeProject.zones.length) {
-      return { data: null, covered: 0, total: 0, cellSize: 150 }
+      return { covered: 0, total: 0, cellSize: 150 }
     }
 
     const zoneBounds = activeProject.zones.map((zone) => {
@@ -684,7 +711,7 @@ function App() {
       0,
     )
     const cellSize = Math.max(60, Math.min(250, Math.sqrt(estimatedArea / 2600)))
-    const cells = new Map<string, { ix: number; iy: number; color: string }>()
+    const cells = new Set<string>()
 
     activeProject.zones.forEach((zone, zoneIndex) => {
       const bounds = zoneBounds[zoneIndex]
@@ -706,9 +733,7 @@ function App() {
             : Math.hypot(x - center.x, y - center.y) <= projectedRadius
           if (isInside) {
             const id = `${ix}:${iy}`
-            if (!cells.has(id)) {
-              cells.set(id, { ix, iy, color: getZoneColor(zone, zoneIndex) })
-            }
+            if (!cells.has(id)) cells.add(id)
           }
         }
       }
@@ -734,30 +759,8 @@ function App() {
       }
     })
 
-    const features = Array.from(cells.entries()).map(([id, cell]) => {
-      const southwest = fromMercator(cell.ix * cellSize, cell.iy * cellSize)
-      const northeast = fromMercator((cell.ix + 1) * cellSize, (cell.iy + 1) * cellSize)
-      return {
-        type: 'Feature' as const,
-        properties: { visited: visited.has(id), color: cell.color },
-        geometry: {
-          type: 'Polygon' as const,
-          coordinates: [
-            [
-              [southwest.lng, southwest.lat],
-              [northeast.lng, southwest.lat],
-              [northeast.lng, northeast.lat],
-              [southwest.lng, northeast.lat],
-              [southwest.lng, southwest.lat],
-            ],
-          ],
-        },
-      }
-    })
-
     const covered = Array.from(cells.keys()).filter((id) => visited.has(id)).length
     return {
-      data: { type: 'FeatureCollection' as const, features },
       covered,
       total: cells.size,
       cellSize,
@@ -766,6 +769,16 @@ function App() {
 
   const coveragePercent =
     coverage.total > 0 ? Math.round((coverage.covered / coverage.total) * 100) : 0
+
+  const toggleZoneVisibility = (zoneId: string, forceVisible?: boolean) => {
+    setVisibleZoneIds((current) => {
+      const next = new Set(current)
+      const shouldShow = forceVisible ?? !next.has(zoneId)
+      if (shouldShow) next.add(zoneId)
+      else next.delete(zoneId)
+      return next
+    })
+  }
 
   const addOfficialWard = (
     ward: WardFeature,
@@ -777,15 +790,16 @@ function App() {
     const existing = activeProject.zones.find((zone) => zone.sourceLabel === sourceLabel)
     if (existing) {
       setFocus({ lat: existing.lat, lng: existing.lng, zoom: 14 })
-      setSearchError(`${sourceLabel} is already selected.`)
+      toggleZoneVisibility(existing.id)
       return
     }
+    const zoneId = uid()
     updateProject((project) => ({
       ...project,
       zones: [
         ...project.zones,
         {
-          id: uid(),
+          id: zoneId,
           name:
             selectedPlace === ward.properties.ward_name
               ? ward.properties.ward_name
@@ -799,6 +813,7 @@ function App() {
         },
       ],
     }))
+    toggleZoneVisibility(zoneId, true)
     setFocus({ lat, lng, zoom: 14 })
     setQuery('')
     setResults([])
@@ -835,12 +850,13 @@ function App() {
         setSearchError('This boundary overlaps an existing area. Choose a separate layout.')
         return
       }
+      const zoneId = uid()
       updateProject((project) => ({
         ...project,
         zones: [
           ...project.zones,
           {
-            id: uid(),
+            id: zoneId,
             name: result.display_name.split(',')[0],
             lat,
             lng,
@@ -851,6 +867,7 @@ function App() {
           },
         ],
       }))
+      toggleZoneVisibility(zoneId, true)
       setFocus({ lat, lng, zoom: 14 })
       setQuery('')
       setResults([])
@@ -909,6 +926,16 @@ function App() {
     gpsSamples.current = []
   }
 
+  const resetRoute = () => {
+    if (!activeProject.track.length) return
+    if (!window.confirm('Reset the recorded route and start fresh?')) return
+    stopTracking()
+    updateProject((project) => ({ ...project, track: [] }))
+    setLivePoint(null)
+    setGpsAccuracy(null)
+    setLiveSpeed(null)
+  }
+
   const startTracking = () => {
     if (!navigator.geolocation) {
       setGpsError('GPS is not supported by this browser.')
@@ -917,6 +944,8 @@ function App() {
     setGpsError('')
     setIsTracking(true)
     setFollowUser(true)
+    setIsTerritoryMode(false)
+    setVisibleZoneIds(new Set())
     setGpsAccuracy(null)
     gpsSamples.current = []
     watchId.current = navigator.geolocation.watchPosition(
@@ -949,8 +978,8 @@ function App() {
             const previous = project.track[project.track.length - 1]
             if (
               previous &&
-              distanceMeters(previous, nextPoint) < 5 &&
-              timestamp - previous.timestamp < 8000
+              distanceMeters(previous, nextPoint) < 2 &&
+              timestamp - previous.timestamp < 4000
             ) {
               return project
             }
@@ -970,11 +999,17 @@ function App() {
     )
   }
 
+  const changeActiveProject = (projectId: string) => {
+    setActiveId(projectId)
+    setVisibleZoneIds(new Set())
+    setIsTerritoryMode(false)
+  }
+
   const createProject = () => {
     stopTracking()
     const project = newProject()
     setProjects((current) => [...current, project])
-    setActiveId(project.id)
+    changeActiveProject(project.id)
     setShowProjectMenu(false)
     setTab('areas')
   }
@@ -983,12 +1018,12 @@ function App() {
     if (projects.length === 1) {
       const fresh = newProject()
       setProjects([fresh])
-      setActiveId(fresh.id)
+      changeActiveProject(fresh.id)
       return
     }
     const remaining = projects.filter((project) => project.id !== id)
     setProjects(remaining)
-    if (activeId === id) setActiveId(remaining[0].id)
+    if (activeId === id) changeActiveProject(remaining[0].id)
   }
 
   const trackPositions: LatLngExpression[] = activeProject.track.map((point) => [
@@ -1051,7 +1086,7 @@ function App() {
                     type="button"
                     onClick={() => {
                       stopTracking()
-                      setActiveId(project.id)
+                      changeActiveProject(project.id)
                       setShowProjectMenu(false)
                     }}
                   >
@@ -1123,10 +1158,8 @@ function App() {
 
                 <div className="legend">
                   <h3>Map legend</h3>
-                  <div><span className="legend-line route" /> Covered route</div>
-                  <div><span className="legend-box covered" /> Visited zone</div>
-                  <div><span className="legend-box pending" /> Not covered</div>
-                  <div><span className="legend-boundary" /> Selected territory</div>
+                  <div><span className="legend-line route" /> Tracked path</div>
+                  <div><span className="legend-boundary" /> Optional territory</div>
                 </div>
               </>
             )}
@@ -1290,12 +1323,7 @@ function App() {
                   <button
                     type="button"
                     className="danger-button"
-                    onClick={() => {
-                      stopTracking()
-                      if (window.confirm('Clear the recorded route for this project?')) {
-                        updateProject((project) => ({ ...project, track: [] }))
-                      }
-                    }}
+                    onClick={resetRoute}
                   >
                     <Trash2 size={17} /> Clear route history
                   </button>
@@ -1328,7 +1356,7 @@ function App() {
             <MapController focus={focus} mapRef={mapRef} />
             <TrackpadPan onManualMove={() => setFollowUser(false)} />
             <MapInteractionHandler onManualMove={() => setFollowUser(false)} />
-            {officialWards && (
+            {isTerritoryMode && officialWards && (
               <GeoJSON
                 key="gba-wards-2025"
                 data={officialWards}
@@ -1354,20 +1382,8 @@ function App() {
                 }}
               />
             )}
-            {coverage.data && (
-              <GeoJSON
-                key={`${activeProject.id}-${coverage.total}-${coverage.covered}-${coverage.cellSize}`}
-                data={coverage.data}
-                style={(feature) => ({
-                  color: feature?.properties.visited ? '#059669' : feature?.properties.color,
-                  weight: feature?.properties.visited ? 0.8 : 0,
-                  fillColor: feature?.properties.visited ? '#34d399' : feature?.properties.color,
-                  fillOpacity: feature?.properties.visited ? 0.2 : 0.02,
-                  interactive: false,
-                })}
-              />
-            )}
             {activeProject.zones.map((zone, index) => (
+              visibleZoneIds.has(zone.id) &&
               zone.geometry && (
                 <GeoJSON
                   key={zone.id}
@@ -1378,10 +1394,12 @@ function App() {
                     fillColor: getZoneColor(zone, index),
                     fillOpacity: 0.055,
                   }}
+                  eventHandlers={{ click: () => toggleZoneVisibility(zone.id) }}
                 />
               )
             ))}
             {activeProject.zones.map((zone, index) => (
+              visibleZoneIds.has(zone.id) && (
               <CircleMarker
                 key={`${zone.id}-point`}
                 center={[zone.lat, zone.lng]}
@@ -1416,11 +1434,12 @@ function App() {
                   </div>
                 </Popup>
               </CircleMarker>
+              )
             ))}
             {trackPositions.length > 1 && (
               <>
-                <Polyline positions={trackPositions} pathOptions={{ color: '#17b88a', weight: 13, opacity: 0.2 }} />
-                <Polyline positions={trackPositions} pathOptions={{ color: '#078765', weight: 4, opacity: 0.95 }} />
+                <Polyline positions={trackPositions} pathOptions={{ color: '#17b88a', weight: 13, opacity: 0.2, lineCap: 'round', lineJoin: 'round' }} />
+                <Polyline positions={trackPositions} pathOptions={{ color: '#078765', weight: 4, opacity: 0.95, lineCap: 'round', lineJoin: 'round' }} />
               </>
             )}
             {currentPoint && (
@@ -1473,18 +1492,22 @@ function App() {
             </div>
           )}
 
-          {activeProject.zones.length > 0 && (
+          {!isTracking && activeProject.zones.length > 0 && (
             <div className="area-map-key" aria-label="Search area color key">
               {activeProject.zones.map((zone, index) => (
                 <button
                   type="button"
                   key={zone.id}
-                  onClick={() => setFocus({ lat: zone.lat, lng: zone.lng, zoom: 13 })}
+                  className={visibleZoneIds.has(zone.id) ? 'active' : ''}
+                  onClick={() => {
+                    toggleZoneVisibility(zone.id)
+                    setFocus({ lat: zone.lat, lng: zone.lng, zoom: 13 })
+                  }}
                 >
                   <i style={{ background: getZoneColor(zone, index) }} />
                   <span>
                     <strong>{index + 1}. {zone.name}</strong>
-                    <small>Boundary</small>
+                    <small>{visibleZoneIds.has(zone.id) ? 'Tap to hide' : 'Tap to show'}</small>
                   </span>
                 </button>
               ))}
@@ -1500,9 +1523,29 @@ function App() {
           {gpsError && <div className="map-message"><X size={16} /><span>{gpsError}</span><button onClick={() => setGpsError('')}>Dismiss</button></div>}
 
           <div className="map-actions">
-            <button type="button" className="add-area-button" onClick={() => setTab('areas')}>
-              <MapPinned size={18} /> Choose territory
-            </button>
+            {!isTracking && (
+              <button
+                type="button"
+                className={`add-area-button ${isTerritoryMode ? 'active' : ''}`}
+                onClick={() => {
+                  setIsTerritoryMode((current) => !current)
+                  setTab('map')
+                }}
+              >
+                <MapPinned size={18} /> {isTerritoryMode ? 'Done' : 'Choose territory'}
+              </button>
+            )}
+            {activeProject.track.length > 0 && (
+              <button
+                type="button"
+                className="reset-route-button"
+                onClick={resetRoute}
+                aria-label="Reset recorded route"
+                title="Reset route"
+              >
+                <RotateCcw size={18} />
+              </button>
+            )}
             <button
               type="button"
               className={`locate-button ${followUser ? 'active' : ''}`}

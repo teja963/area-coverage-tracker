@@ -1192,6 +1192,10 @@ button {
   background: #f2f5f8;
 }
 
+.area-map-key button.active {
+  background: #eef6ff;
+}
+
 .area-map-key i {
   width: 11px;
   height: 28px;
@@ -1281,7 +1285,8 @@ button {
 }
 
 .add-area-button,
-.locate-button {
+.locate-button,
+.reset-route-button {
   height: 42px;
   display: flex;
   align-items: center;
@@ -1306,6 +1311,17 @@ button {
   color: #334155;
   border: 1px solid rgba(210, 215, 221, 0.9);
   background: rgba(255, 255, 255, 0.97);
+}
+
+.reset-route-button {
+  width: 42px;
+  color: #d13f52;
+  border: 1px solid #f0cbd1;
+  background: rgba(255, 250, 251, 0.97);
+}
+
+.add-area-button.active {
+  background: #0f766e;
 }
 
 .locate-button.active {
