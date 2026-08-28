@@ -15,18 +15,16 @@ import type { LatLngExpression, Map as LeafletMap } from 'leaflet'
 import {
   Activity,
   ChevronDown,
-  CirclePlus,
   Clock3,
-  Crosshair,
   History,
   Layers3,
   LocateFixed,
   Map as MapIcon,
   MapPin,
+  MapPinned,
   Navigation,
   Pause,
   Play,
-  Plus,
   RefreshCw,
   Route,
   Search,
@@ -45,6 +43,8 @@ type Zone = {
   radius?: number
   color?: string
   geometry?: BoundaryGeometry
+  source?: 'gba' | 'osm'
+  sourceLabel?: string
 }
 
 type BoundaryGeometry =
@@ -75,18 +75,38 @@ type SearchResult = {
   type: string
 }
 
+type WardFeature = {
+  type: 'Feature'
+  properties: {
+    ward_id: string
+    ward_name: string
+    corporation: string
+    assembly: string
+    source: string
+  }
+  geometry: BoundaryGeometry
+}
+
+type WardFeatureCollection = {
+  type: 'FeatureCollection'
+  features: WardFeature[]
+}
+
 type Tab = 'map' | 'areas' | 'history'
 
 const BENGALURU: LatLngExpression = [12.917, 77.61]
-const STORAGE_KEY = 'coverly-projects-v2'
-const ACTIVE_PROJECT_KEY = 'coverly-active-project-v2'
+const STORAGE_KEY = 'coverly-projects-v3'
+const ACTIVE_PROJECT_KEY = 'coverly-active-project-v3'
+const PREVIOUS_STORAGE_KEY = 'coverly-projects-v2'
+const PREVIOUS_ACTIVE_PROJECT_KEY = 'coverly-active-project-v2'
 const LEGACY_STORAGE_KEY = 'coverly-projects-v1'
 const LEGACY_ACTIVE_PROJECT_KEY = 'coverly-active-project-v1'
+const OFFICIAL_STARTER_KEY = 'coverly-gba-official-starter-v1'
 const EARTH_RADIUS = 6378137
 const AREA_COLORS = [
   '#2563eb',
   '#f97316',
-  '#8b5cf6',
+  '#16a34a',
   '#ec4899',
   '#14b8a6',
   '#ca8a04',
@@ -115,13 +135,17 @@ function loadProjects(): Project[] {
       const parsed = JSON.parse(stored) as Project[]
       if (Array.isArray(parsed) && parsed.length) return parsed
     }
-    const legacyStored = localStorage.getItem(LEGACY_STORAGE_KEY)
-    if (legacyStored) {
-      const legacyProjects = JSON.parse(legacyStored) as Project[]
-      if (Array.isArray(legacyProjects) && legacyProjects.length) {
-        const migrated = legacyProjects.map((project) => ({
+    const previousStored =
+      localStorage.getItem(PREVIOUS_STORAGE_KEY) ||
+      localStorage.getItem(LEGACY_STORAGE_KEY)
+    if (previousStored) {
+      const previousProjects = JSON.parse(previousStored) as Project[]
+      if (Array.isArray(previousProjects) && previousProjects.length) {
+        const migrated = previousProjects.map((project) => ({
           ...project,
-          zones: project.zones.filter((zone) => zone.geometry),
+          zones: project.zones.filter(
+            (zone) => zone.source === 'gba' || zone.source === 'osm',
+          ),
           updatedAt: Date.now(),
         }))
         localStorage.setItem(STORAGE_KEY, JSON.stringify(migrated))
@@ -178,6 +202,56 @@ async function findPlaces(term: string, signal?: AbortSignal): Promise<SearchRes
   })
 }
 
+let wardDataPromise: Promise<WardFeatureCollection> | null = null
+
+function loadOfficialWards() {
+  if (!wardDataPromise) {
+    wardDataPromise = fetch(`${import.meta.env.BASE_URL}data/gba-wards.geojson`).then(
+      async (response) => {
+        if (!response.ok) throw new Error('Official boundary data unavailable')
+        return (await response.json()) as WardFeatureCollection
+      },
+    )
+  }
+  return wardDataPromise
+}
+
+function wardAtPoint(
+  collection: WardFeatureCollection,
+  lat: number,
+  lng: number,
+) {
+  return collection.features.find((feature) =>
+    pointInGeometry(lng, lat, feature.geometry),
+  )
+}
+
+const BENGALURU_TARGETS = [
+  { name: 'Jayadeva Hospital', lat: 12.916731, lng: 77.5999663 },
+  { name: 'BTM Layout', lat: 12.9140008, lng: 77.6102821 },
+  { name: 'Silk Board Junction', lat: 12.9158171, lng: 77.6240368 },
+  { name: 'Bommanahalli', lat: 12.9089453, lng: 77.6239038 },
+]
+
+function officialStarterZones(collection: WardFeatureCollection) {
+  const selected = new Set<string>()
+  return BENGALURU_TARGETS.flatMap((target, index) => {
+    const ward = wardAtPoint(collection, target.lat, target.lng)
+    if (!ward || selected.has(ward.properties.ward_id)) return []
+    selected.add(ward.properties.ward_id)
+    return [{
+      id: uid(),
+      name: `${target.name} · ${ward.properties.ward_name}`,
+      lat: target.lat,
+      lng: target.lng,
+      geometry: ward.geometry,
+      color: AREA_COLORS[index % AREA_COLORS.length],
+      source: 'gba' as const,
+      sourceLabel: `Official GBA Ward ${ward.properties.ward_id}`,
+    }]
+  })
+}
+
 async function findBoundary(result: SearchResult): Promise<BoundaryGeometry | null> {
   const params = new URLSearchParams({
     q: result.display_name,
@@ -197,10 +271,12 @@ async function findBoundary(result: SearchResult): Promise<BoundaryGeometry | nu
   return (match?.geometry as BoundaryGeometry | undefined) ?? null
 }
 
+function geometryPolygons(geometry: BoundaryGeometry) {
+  return geometry.type === 'Polygon' ? [geometry.coordinates] : geometry.coordinates
+}
+
 function geometryRings(geometry: BoundaryGeometry) {
-  return geometry.type === 'Polygon'
-    ? [geometry.coordinates[0]]
-    : geometry.coordinates.map((polygon) => polygon[0])
+  return geometryPolygons(geometry).map((polygon) => polygon[0])
 }
 
 function pointInRing(lng: number, lat: number, ring: number[][]) {
@@ -220,7 +296,11 @@ function pointInRing(lng: number, lat: number, ring: number[][]) {
 }
 
 function pointInGeometry(lng: number, lat: number, geometry: BoundaryGeometry) {
-  return geometryRings(geometry).some((ring) => pointInRing(lng, lat, ring))
+  return geometryPolygons(geometry).some(
+    ([outer, ...holes]) =>
+      pointInRing(lng, lat, outer) &&
+      !holes.some((hole) => pointInRing(lng, lat, hole)),
+  )
 }
 
 function ringsCross(first: number[][], second: number[][]) {
@@ -325,19 +405,8 @@ function smoothGpsSamples(samples: TrackPoint[]): TrackPoint {
   }
 }
 
-function MapClickHandler({
-  enabled,
-  onAdd,
-  onManualMove,
-}: {
-  enabled: boolean
-  onAdd: (lat: number, lng: number) => void
-  onManualMove: () => void
-}) {
+function MapInteractionHandler({ onManualMove }: { onManualMove: () => void }) {
   useMapEvents({
-    click(event) {
-      if (enabled) onAdd(event.latlng.lat, event.latlng.lng)
-    },
     dragstart() {
       onManualMove()
     },
@@ -402,6 +471,7 @@ function App() {
   const [activeId, setActiveId] = useState(() => {
     const savedId =
       localStorage.getItem(ACTIVE_PROJECT_KEY) ||
+      localStorage.getItem(PREVIOUS_ACTIVE_PROJECT_KEY) ||
       localStorage.getItem(LEGACY_ACTIVE_PROJECT_KEY)
     return projects.some((project) => project.id === savedId) ? savedId! : projects[0].id
   })
@@ -411,9 +481,9 @@ function App() {
   const [livePoint, setLivePoint] = useState<TrackPoint | null>(null)
   const [gpsAccuracy, setGpsAccuracy] = useState<number | null>(null)
   const [liveSpeed, setLiveSpeed] = useState<number | null>(null)
-  const [isAdding, setIsAdding] = useState(false)
-  const [draftPoints, setDraftPoints] = useState<Array<{ lat: number; lng: number }>>([])
   const [isResolvingBoundary, setIsResolvingBoundary] = useState(false)
+  const [officialWards, setOfficialWards] = useState<WardFeatureCollection | null>(null)
+  const [officialBoundaryError, setOfficialBoundaryError] = useState(false)
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<SearchResult[]>([])
   const [isSearching, setIsSearching] = useState(false)
@@ -454,6 +524,26 @@ function App() {
 
   useEffect(() => {
     localStorage.setItem(ACTIVE_PROJECT_KEY, activeId)
+  }, [activeId])
+
+  useEffect(() => {
+    loadOfficialWards()
+      .then((collection) => {
+        setOfficialWards(collection)
+        if (localStorage.getItem(OFFICIAL_STARTER_KEY)) return
+        setProjects((current) => {
+          if (current.some((project) => project.zones.length > 0)) return current
+          const zones = officialStarterZones(collection)
+          if (!zones.length) return current
+          localStorage.setItem(OFFICIAL_STARTER_KEY, 'loaded')
+          return current.map((project) =>
+            project.id === activeId
+              ? { ...project, name: 'Bengaluru house search', zones, updatedAt: Date.now() }
+              : project,
+          )
+        })
+      })
+      .catch(() => setOfficialBoundaryError(true))
   }, [activeId])
 
   useEffect(() => {
@@ -532,7 +622,7 @@ function App() {
         setResults(await findPlaces(term, controller.signal))
       } catch (error) {
         if (!(error instanceof DOMException && error.name === 'AbortError')) {
-          setSearchError('Suggestions are temporarily unavailable. You can tap the map instead.')
+          setSearchError('Suggestions are temporarily unavailable.')
         }
       } finally {
         if (!controller.signal.aborted) setIsSearching(false)
@@ -677,13 +767,64 @@ function App() {
   const coveragePercent =
     coverage.total > 0 ? Math.round((coverage.covered / coverage.total) * 100) : 0
 
+  const addOfficialWard = (
+    ward: WardFeature,
+    lat: number,
+    lng: number,
+    selectedPlace = ward.properties.ward_name,
+  ) => {
+    const sourceLabel = `Official GBA Ward ${ward.properties.ward_id}`
+    const existing = activeProject.zones.find((zone) => zone.sourceLabel === sourceLabel)
+    if (existing) {
+      setFocus({ lat: existing.lat, lng: existing.lng, zoom: 14 })
+      setSearchError(`${sourceLabel} is already selected.`)
+      return
+    }
+    updateProject((project) => ({
+      ...project,
+      zones: [
+        ...project.zones,
+        {
+          id: uid(),
+          name:
+            selectedPlace === ward.properties.ward_name
+              ? ward.properties.ward_name
+              : `${selectedPlace} · ${ward.properties.ward_name}`,
+          lat,
+          lng,
+          geometry: ward.geometry,
+          color: AREA_COLORS[project.zones.length % AREA_COLORS.length],
+          source: 'gba',
+          sourceLabel,
+        },
+      ],
+    }))
+    setFocus({ lat, lng, zoom: 14 })
+    setQuery('')
+    setResults([])
+  }
+
   const addBoundaryZone = async (result: SearchResult) => {
     setIsResolvingBoundary(true)
     setSearchError('')
     try {
+      const lat = Number(result.lat)
+      const lng = Number(result.lon)
+      const wards = officialWards ?? (await loadOfficialWards())
+      if (!officialWards) setOfficialWards(wards)
+      const officialWard = wardAtPoint(wards, lat, lng)
+      if (officialWard) {
+        addOfficialWard(
+          officialWard,
+          lat,
+          lng,
+          result.display_name.split(',')[0],
+        )
+        return
+      }
       const geometry = await findBoundary(result)
       if (!geometry) {
-        setSearchError('This place has no mapped boundary. Use “Draw custom boundary” instead.')
+        setSearchError('No verified territory boundary is available for this place.')
         return
       }
       if (
@@ -694,8 +835,6 @@ function App() {
         setSearchError('This boundary overlaps an existing area. Choose a separate layout.')
         return
       }
-      const lat = Number(result.lat)
-      const lng = Number(result.lon)
       updateProject((project) => ({
         ...project,
         zones: [
@@ -707,6 +846,8 @@ function App() {
             lng,
             geometry,
             color: AREA_COLORS[project.zones.length % AREA_COLORS.length],
+            source: 'osm',
+            sourceLabel: 'OpenStreetMap mapped boundary',
           },
         ],
       }))
@@ -714,55 +855,10 @@ function App() {
       setQuery('')
       setResults([])
     } catch {
-      setSearchError('Could not load this boundary. Draw the custom boundary on the map.')
+      setSearchError('Verified boundary data is temporarily unavailable.')
     } finally {
       setIsResolvingBoundary(false)
     }
-  }
-
-  const addDraftPoint = (lat: number, lng: number) => {
-    setDraftPoints((points) => [...points, { lat, lng }])
-  }
-
-  const finishCustomBoundary = () => {
-    if (draftPoints.length < 3) {
-      setSearchError('Add at least three map points to complete a boundary.')
-      return
-    }
-    const geometry: BoundaryGeometry = {
-      type: 'Polygon',
-      coordinates: [[
-        ...draftPoints.map((point) => [point.lng, point.lat]),
-        [draftPoints[0].lng, draftPoints[0].lat],
-      ]],
-    }
-    if (
-      activeProject.zones.some(
-        (zone) => zone.geometry && geometriesOverlap(zone.geometry, geometry),
-      )
-    ) {
-      setSearchError('The drawn boundary overlaps an existing area. Adjust its points.')
-      return
-    }
-    const lat = draftPoints.reduce((sum, point) => sum + point.lat, 0) / draftPoints.length
-    const lng = draftPoints.reduce((sum, point) => sum + point.lng, 0) / draftPoints.length
-    updateProject((project) => ({
-      ...project,
-      zones: [
-        ...project.zones,
-        {
-          id: uid(),
-          name: `Custom area ${project.zones.length + 1}`,
-          lat,
-          lng,
-          geometry,
-          color: AREA_COLORS[project.zones.length % AREA_COLORS.length],
-        },
-      ],
-    }))
-    setDraftPoints([])
-    setIsAdding(false)
-    setFocus({ lat, lng, zoom: 14 })
   }
 
   const searchPlaces = async (event: React.FormEvent) => {
@@ -773,7 +869,7 @@ function App() {
     try {
       setResults(await findPlaces(query.trim()))
     } catch {
-      setSearchError('Place search is temporarily unavailable. You can tap the map instead.')
+      setSearchError('Place search is temporarily unavailable.')
     } finally {
       setIsSearching(false)
     }
@@ -973,7 +1069,7 @@ function App() {
                 </div>
               ))}
               <button type="button" className="new-project" onClick={createProject}>
-                <Plus size={16} /> New project
+                <MapPinned size={16} /> New project
               </button>
             </div>
           )}
@@ -1030,7 +1126,7 @@ function App() {
                   <div><span className="legend-line route" /> Covered route</div>
                   <div><span className="legend-box covered" /> Visited zone</div>
                   <div><span className="legend-box pending" /> Not covered</div>
-                  <div><span className="legend-circle" /> Target area</div>
+                  <div><span className="legend-boundary" /> Selected territory</div>
                 </div>
               </>
             )}
@@ -1054,8 +1150,8 @@ function App() {
 
                 <section className="area-builder">
                   <div className="builder-title">
-                    <span><CirclePlus size={18} /></span>
-                    <div><strong>Add a layout boundary</strong><small>Mapped locality or custom outline</small></div>
+                    <span><MapPinned size={18} /></span>
+                    <div><strong>Choose a territory</strong><small>Official ward or verified mapped boundary</small></div>
                   </div>
 
                   <form className="search-form" onSubmit={searchPlaces}>
@@ -1088,25 +1184,19 @@ function App() {
                         >
                           <MapPin size={17} />
                           <span>{result.display_name.split(',')[0]}<small>{result.display_name}</small></span>
-                          <Plus size={16} />
                         </button>
                       ))}
                     </div>
                   )}
                   {isResolvingBoundary && <p className="hint">Loading locality boundary…</p>}
+                  {!officialBoundaryError && officialWards && (
+                    <p className="boundary-source-note">Official 2025 GBA ward demarcation loaded</p>
+                  )}
+                  {officialBoundaryError && (
+                    <p className="message error">Official Bengaluru boundaries could not be loaded.</p>
+                  )}
 
                   <div className="add-actions">
-                    <button
-                      type="button"
-                      className={`secondary-button ${isAdding ? 'active' : ''}`}
-                      onClick={() => {
-                        setIsAdding((adding) => !adding)
-                        setDraftPoints([])
-                        setTab('map')
-                      }}
-                    >
-                      <Crosshair size={17} /> {isAdding ? 'Drawing boundary…' : 'Draw custom boundary'}
-                    </button>
                     <button type="button" className="secondary-button" onClick={() => locateMe()}>
                       <LocateFixed size={17} /> My location
                     </button>
@@ -1115,9 +1205,9 @@ function App() {
 
                 {activeProject.zones.length === 0 ? (
                   <div className="empty-state">
-                    <CirclePlus size={29} />
-                    <strong>Add your first independent layout</strong>
-                    <span>Search for a mapped boundary or draw the exact custom outline.</span>
+                    <MapPinned size={29} />
+                    <strong>Choose your first territory</strong>
+                    <span>Search a place to select its verified irregular boundary.</span>
                   </div>
                 ) : (
                   <div className="zone-list">
@@ -1167,8 +1257,8 @@ function App() {
                         </button>
                         <div className="zone-boundary-summary">
                           <span className="boundary-status" />
-                          <strong>{zone.geometry ? 'Independent boundary' : 'Legacy circle'}</strong>
-                          <small>{zone.geometry ? `${geometryRings(zone.geometry).flat().length - 1} boundary points` : 'Recreate as a boundary'}</small>
+                          <strong>{zone.sourceLabel ?? 'Verified mapped boundary'}</strong>
+                          <small>{zone.geometry ? `${geometryRings(zone.geometry).flat().length - 1} boundary points` : 'Boundary unavailable'}</small>
                         </div>
                       </article>
                     ))}
@@ -1216,7 +1306,7 @@ function App() {
           </div>
         </aside>
 
-        <div className={`map-wrap ${isAdding ? 'adding' : ''}`}>
+        <div className="map-wrap">
           <MapContainer
             center={BENGALURU}
             zoom={13}
@@ -1237,11 +1327,33 @@ function App() {
             />
             <MapController focus={focus} mapRef={mapRef} />
             <TrackpadPan onManualMove={() => setFollowUser(false)} />
-            <MapClickHandler
-              enabled={isAdding}
-              onAdd={addDraftPoint}
-              onManualMove={() => setFollowUser(false)}
-            />
+            <MapInteractionHandler onManualMove={() => setFollowUser(false)} />
+            {officialWards && (
+              <GeoJSON
+                key="gba-wards-2025"
+                data={officialWards}
+                style={{
+                  color: '#64748b',
+                  weight: 0.8,
+                  fillColor: '#f8fafc',
+                  fillOpacity: 0.018,
+                }}
+                onEachFeature={(feature, layer) => {
+                  const ward = feature as WardFeature
+                  layer.bindTooltip(
+                    `Ward ${ward.properties.ward_id} · ${ward.properties.ward_name}`,
+                    { sticky: true, direction: 'top' },
+                  )
+                  layer.on('click', (event) =>
+                    addOfficialWard(
+                      ward,
+                      event.latlng.lat,
+                      event.latlng.lng,
+                    ),
+                  )
+                }}
+              />
+            )}
             {coverage.data && (
               <GeoJSON
                 key={`${activeProject.id}-${coverage.total}-${coverage.covered}-${coverage.cellSize}`}
@@ -1256,7 +1368,7 @@ function App() {
               />
             )}
             {activeProject.zones.map((zone, index) => (
-              zone.geometry ? (
+              zone.geometry && (
                 <GeoJSON
                   key={zone.id}
                   data={zone.geometry}
@@ -1267,41 +1379,8 @@ function App() {
                     fillOpacity: 0.055,
                   }}
                 />
-              ) : (
-                <Circle
-                  key={zone.id}
-                  center={[zone.lat, zone.lng]}
-                  radius={zone.radius ?? 500}
-                  pathOptions={{
-                    color: getZoneColor(zone, index),
-                    weight: 2,
-                    fillColor: getZoneColor(zone, index),
-                    fillOpacity: 0.06,
-                  }}
-                />
               )
             ))}
-            {draftPoints.length > 0 && (
-              <>
-                <Polyline
-                  positions={[
-                    ...draftPoints.map((point) => [point.lat, point.lng] as LatLngExpression),
-                    ...(draftPoints.length > 2
-                      ? [[draftPoints[0].lat, draftPoints[0].lng] as LatLngExpression]
-                      : []),
-                  ]}
-                  pathOptions={{ color: '#1a73e8', weight: 3, dashArray: '7 5' }}
-                />
-                {draftPoints.map((point, index) => (
-                  <CircleMarker
-                    key={`${point.lat}-${point.lng}-${index}`}
-                    center={[point.lat, point.lng]}
-                    radius={5}
-                    pathOptions={{ color: '#fff', weight: 2, fillColor: '#1a73e8', fillOpacity: 1 }}
-                  />
-                ))}
-              </>
-            )}
             {activeProject.zones.map((zone, index) => (
               <CircleMarker
                 key={`${zone.id}-point`}
@@ -1322,7 +1401,7 @@ function App() {
                     <span>{index + 1}</span>
                     <div>
                       <strong>{zone.name}</strong>
-                      <small>Independent boundary</small>
+                      <small>{zone.sourceLabel ?? 'Verified boundary'}</small>
                     </div>
                   </div>
                 </Tooltip>
@@ -1331,7 +1410,7 @@ function App() {
                     <span className="popup-number" style={{ background: getZoneColor(zone, index) }}>{index + 1}</span>
                     <div>
                       <strong>{zone.name}</strong>
-                      <span>{zone.geometry ? 'Independent layout boundary' : 'Legacy circle area'}</span>
+                      <span>{zone.sourceLabel ?? 'Verified mapped boundary'}</span>
                       <small>{zone.lat.toFixed(5)}, {zone.lng.toFixed(5)}</small>
                     </div>
                   </div>
@@ -1418,18 +1497,11 @@ function App() {
             <span><strong>{gpsAccuracy ? `±${Math.round(gpsAccuracy)} m` : '—'}</strong> GPS</span>
           </div>
 
-          {isAdding && (
-            <div className="boundary-draw-bar">
-              <span><Crosshair size={17} /> Tap map corners · {draftPoints.length} points</span>
-              <button type="button" onClick={finishCustomBoundary} disabled={draftPoints.length < 3}>Finish</button>
-              <button type="button" onClick={() => { setIsAdding(false); setDraftPoints([]) }}>Cancel</button>
-            </div>
-          )}
           {gpsError && <div className="map-message"><X size={16} /><span>{gpsError}</span><button onClick={() => setGpsError('')}>Dismiss</button></div>}
 
           <div className="map-actions">
             <button type="button" className="add-area-button" onClick={() => setTab('areas')}>
-              <Plus size={18} /> Add search area
+              <MapPinned size={18} /> Choose territory
             </button>
             <button
               type="button"

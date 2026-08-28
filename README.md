@@ -5,14 +5,18 @@ visited routes in real time.
 
 ## Features
 
-- Add target points by place search, map tap, or current GPS.
-- Set each radius from 100 metres to 10 kilometres.
+- View all 369 official 2025 Greater Bengaluru ward demarcations.
+- Search or tap a ward to select its exact irregular territory.
+- Use verified OpenStreetMap polygons outside the official Bengaluru dataset.
 - Live route recording and an adaptive coverage grid.
 - Multiple locally saved projects with history and statistics.
 - Responsive phone and desktop layouts.
 - No account, backend, or paid map key.
 
 Location data stays in the browser. OpenStreetMap provides the map and search.
+The Bengaluru polygons come from the public-domain
+[GBA Final Wards Map, December 2025](https://data.opencity.in/dataset/gba-wards-delimitation-2025)
+published through OpenCity.
 
 ## Run
 

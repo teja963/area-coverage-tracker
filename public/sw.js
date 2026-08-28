@@ -1,4 +1,4 @@
-const CACHE_NAME = 'coverly-shell-v3'
+const CACHE_NAME = 'coverly-shell-v4'
 const BASE_PATH = new URL(self.registration.scope).pathname
 const APP_SHELL = [BASE_PATH, `${BASE_PATH}manifest.webmanifest`, `${BASE_PATH}app-icon.svg`]
 
@@ -23,7 +23,7 @@ self.addEventListener('fetch', (event) => {
 
   if (event.request.mode === 'navigate') {
     event.respondWith(
-      fetch(event.request)
+      fetch(event.request, { cache: 'no-store' })
         .then((response) => {
           const copy = response.clone()
           caches.open(CACHE_NAME).then((cache) => cache.put(BASE_PATH, copy))
