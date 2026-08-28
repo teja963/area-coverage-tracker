@@ -1,0 +1,19 @@
+{
+  "name": "Coverly — Area Coverage Tracker",
+  "short_name": "Coverly",
+  "description": "Plan search areas and see your live GPS route coverage.",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "background_color": "#f6f7f9",
+  "theme_color": "#0f766e",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "app-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
