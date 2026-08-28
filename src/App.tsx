@@ -263,7 +263,6 @@ function MapController({
 
 function TrackpadPan({ onManualMove }: { onManualMove: () => void }) {
   const map = useMap()
-  const zoomAccumulator = useRef(0)
 
   useEffect(() => {
     const container = map.getContainer()
@@ -276,19 +275,18 @@ function TrackpadPan({ onManualMove }: { onManualMove: () => void }) {
       event.stopImmediatePropagation()
 
       if (isHorizontalGesture && Math.abs(horizontalDelta) > 0.5) {
-        zoomAccumulator.current = 0
         onManualMove()
         map.panBy([horizontalDelta, 0], { animate: false })
         return
       }
 
-      zoomAccumulator.current += event.deltaY
-      if (Math.abs(zoomAccumulator.current) < 40) return
-
-      const zoomDirection = zoomAccumulator.current < 0 ? 1 : -1
       const pointer = map.mouseEventToContainerPoint(event)
-      map.setZoomAround(pointer, map.getZoom() + zoomDirection)
-      zoomAccumulator.current = 0
+      const limitedDelta = Math.sign(event.deltaY) * Math.min(Math.abs(event.deltaY), 25)
+      const targetZoom = Math.max(
+        map.getMinZoom(),
+        Math.min(map.getMaxZoom(), map.getZoom() - limitedDelta * 0.018),
+      )
+      map.setZoomAround(pointer, targetZoom)
     }
 
     container.addEventListener('wheel', handleWheel, { passive: false, capture: true })
@@ -1035,6 +1033,8 @@ function App() {
             center={BENGALURU}
             zoom={13}
             zoomControl={false}
+            zoomSnap={0.05}
+            zoomDelta={0.5}
             scrollWheelZoom={false}
             touchZoom
             dragging
