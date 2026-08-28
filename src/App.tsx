@@ -27,6 +27,7 @@ import {
   Pause,
   Play,
   Plus,
+  RefreshCw,
   Route,
   Search,
   Square,
@@ -319,10 +320,14 @@ function App() {
     null,
   )
   const [showProjectMenu, setShowProjectMenu] = useState(false)
+  const [pullDistance, setPullDistance] = useState(0)
+  const [isRefreshing, setIsRefreshing] = useState(false)
   const mapRef = useRef<LeafletMap | null>(null)
   const watchId = useRef<number | null>(null)
   const gpsSamples = useRef<TrackPoint[]>([])
   const followUserRef = useRef(true)
+  const pullStart = useRef<{ x: number; y: number } | null>(null)
+  const pullDistanceRef = useRef(0)
 
   const activeProject = projects.find((project) => project.id === activeId) ?? projects[0]
 
@@ -361,6 +366,54 @@ function App() {
   useEffect(() => {
     return () => {
       if (watchId.current !== null) navigator.geolocation.clearWatch(watchId.current)
+    }
+  }, [])
+
+  useEffect(() => {
+    const beginPull = (event: TouchEvent) => {
+      if (event.touches.length !== 1 || event.touches[0].clientY > 120) return
+      const target = event.target as HTMLElement
+      if (target.closest('input, button, .side-panel, .project-menu')) return
+      pullStart.current = {
+        x: event.touches[0].clientX,
+        y: event.touches[0].clientY,
+      }
+    }
+
+    const updatePull = (event: TouchEvent) => {
+      if (!pullStart.current || event.touches.length !== 1) return
+      const verticalDistance = event.touches[0].clientY - pullStart.current.y
+      const horizontalDistance = Math.abs(event.touches[0].clientX - pullStart.current.x)
+      if (verticalDistance <= 6 || verticalDistance < horizontalDistance) return
+
+      event.preventDefault()
+      const distance = Math.min(100, verticalDistance * 0.55)
+      pullDistanceRef.current = distance
+      setPullDistance(distance)
+    }
+
+    const finishPull = () => {
+      if (!pullStart.current) return
+      pullStart.current = null
+      if (pullDistanceRef.current >= 70) {
+        setIsRefreshing(true)
+        setPullDistance(82)
+        window.setTimeout(() => window.location.reload(), 250)
+      } else {
+        pullDistanceRef.current = 0
+        setPullDistance(0)
+      }
+    }
+
+    document.addEventListener('touchstart', beginPull, { passive: true, capture: true })
+    document.addEventListener('touchmove', updatePull, { passive: false, capture: true })
+    document.addEventListener('touchend', finishPull, { capture: true })
+    document.addEventListener('touchcancel', finishPull, { capture: true })
+    return () => {
+      document.removeEventListener('touchstart', beginPull, { capture: true })
+      document.removeEventListener('touchmove', updatePull, { capture: true })
+      document.removeEventListener('touchend', finishPull, { capture: true })
+      document.removeEventListener('touchcancel', finishPull, { capture: true })
     }
   }, [])
 
@@ -666,6 +719,20 @@ function App() {
 
   return (
     <main className="app-shell">
+      <div
+        className={`pull-refresh-indicator ${isRefreshing ? 'refreshing' : ''}`}
+        style={{ transform: `translate(-50%, ${pullDistance - 58}px)` }}
+        aria-hidden="true"
+      >
+        <RefreshCw size={17} />
+        <span>
+          {isRefreshing
+            ? 'Refreshing…'
+            : pullDistance >= 70
+              ? 'Release to refresh'
+              : 'Pull to refresh'}
+        </span>
+      </div>
       <header className="topbar">
         <div className="brand">
           <div className="brand-mark"><Navigation size={19} fill="currentColor" /></div>
