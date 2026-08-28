@@ -1498,6 +1498,7 @@ button {
   .stats-grid > div { padding: 9px 7px; }
   .legend { display: none; }
   .map-wrap { width: 100%; height: 100%; }
+  .area-label-tooltip { display: none !important; }
   .map-search { width: calc(100% - 22px); height: 42px; top: 11px; left: 11px; box-sizing: border-box; }
   .map-suggestions {
     width: calc(100% - 22px);
