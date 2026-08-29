@@ -1635,6 +1635,7 @@ function App() {
                         />
                         <button
                           type="button"
+                          className="marker-locate-button"
                           aria-label={`Show marked place ${index + 1}`}
                           onClick={() => {
                             setTab('map')
@@ -1642,6 +1643,21 @@ function App() {
                           }}
                         >
                           <LocateFixed size={15} />
+                        </button>
+                        <button
+                          type="button"
+                          className="marker-unmark-button"
+                          aria-label={`Unmark place ${index + 1}`}
+                          onClick={() =>
+                            updateProject((project) => ({
+                              ...project,
+                              markers: project.markers.filter(
+                                (item) => item.id !== marker.id,
+                              ),
+                            }))
+                          }
+                        >
+                          <Trash2 size={14} /> Unmark
                         </button>
                       </div>
                     ))}
@@ -1899,6 +1915,7 @@ function App() {
                     <button
                       type="button"
                       aria-label={`Delete marker ${index + 1}`}
+                      title="Unmark this place"
                       onClick={() =>
                         updateProject((project) => ({
                           ...project,

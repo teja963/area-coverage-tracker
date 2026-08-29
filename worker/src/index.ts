@@ -4,12 +4,15 @@ interface Env {
 
 const SHARE_TTL_SECONDS = 7 * 24 * 60 * 60
 const MAX_PAYLOAD_BYTES = 5_000_000
-const APP_ORIGIN = 'https://teja963.github.io'
+const APP_ORIGINS = new Set([
+  'https://teja963.github.io',
+  'https://area-coverage-tracker.panasateja123.workers.dev',
+])
 
 function isAllowedOrigin(origin: string | null) {
   return (
     !origin ||
-    origin === APP_ORIGIN ||
+    APP_ORIGINS.has(origin) ||
     origin.startsWith('http://localhost:') ||
     origin.startsWith('http://127.0.0.1:')
   )

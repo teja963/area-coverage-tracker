@@ -21,7 +21,7 @@ if ('serviceWorker' in navigator && import.meta.env.PROD) {
 
   window.addEventListener('load', () => {
     navigator.serviceWorker
-      .register(`${import.meta.env.BASE_URL}sw.js?v=7`, { updateViaCache: 'none' })
+      .register(`${import.meta.env.BASE_URL}sw.js?v=8`, { updateViaCache: 'none' })
       .then((registration) => registration.update())
       .catch(() => {
         // The app remains usable if offline support cannot be registered.

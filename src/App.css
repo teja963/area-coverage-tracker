@@ -952,6 +952,18 @@ button {
   cursor: pointer;
 }
 
+.marker-history-item .marker-unmark-button {
+  width: auto;
+  padding: 0 8px;
+  display: flex;
+  gap: 4px;
+  color: #b53f4d;
+  font-size: 8px;
+  font-weight: 800;
+  border-color: #efc9ce;
+  background: #fff7f8;
+}
+
 .history-actions {
   display: grid;
   gap: 8px;
