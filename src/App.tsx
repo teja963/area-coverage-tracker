@@ -7,6 +7,7 @@ import {
   CircleMarker,
   GeoJSON,
   MapContainer,
+  Marker,
   Popup,
   Polyline,
   TileLayer,
@@ -14,10 +15,12 @@ import {
   useMap,
   useMapEvents,
 } from 'react-leaflet'
-import type { LatLngExpression, Map as LeafletMap } from 'leaflet'
+import { divIcon, type LatLngExpression, type Map as LeafletMap } from 'leaflet'
 import {
   Activity,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Clock3,
   Flag,
   History,
@@ -135,6 +138,20 @@ const AREA_COLORS = [
 ]
 const TERRITORY_COLORS = ['#3b82f6', '#f97316', '#22c55e', '#8b5cf6', '#f43f5e']
 const ROUTE_SHARE_API = 'https://coverly-route-share.panasateja123.workers.dev'
+const IMPORTANT_PLACE_ICON = divIcon({
+  className: 'important-place-marker',
+  html: `
+    <svg viewBox="0 0 32 38" aria-hidden="true">
+      <path d="M8 34V4" fill="none" stroke="#8a5b08" stroke-width="3" stroke-linecap="round"/>
+      <path d="M10 5h16l-4 6 4 6H10z" fill="#f59e0b" stroke="#fff" stroke-width="2" stroke-linejoin="round"/>
+      <circle cx="8" cy="34" r="3" fill="#8a5b08" stroke="#fff" stroke-width="1.5"/>
+    </svg>
+  `,
+  iconSize: [32, 38],
+  iconAnchor: [8, 34],
+  popupAnchor: [6, -30],
+  tooltipAnchor: [8, -30],
+})
 
 const uid = () => crypto.randomUUID()
 
@@ -402,6 +419,14 @@ function formatDistance(meters: number) {
   return meters >= 1000 ? `${(meters / 1000).toFixed(1)} km` : `${Math.round(meters)} m`
 }
 
+function trackDistance(track: TrackPoint[]) {
+  return track.reduce(
+    (total, point, index) =>
+      index === 0 ? 0 : total + distanceMeters(track[index - 1], point),
+    0,
+  )
+}
+
 function formatDuration(ms: number) {
   const minutes = Math.floor(ms / 60000)
   if (minutes < 60) return `${minutes} min`
@@ -528,12 +553,19 @@ function App() {
     null,
   )
   const [showProjectMenu, setShowProjectMenu] = useState(false)
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false)
+  const [isUpdatingApp, setIsUpdatingApp] = useState(false)
   const [pullDistance, setPullDistance] = useState(0)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const mapRef = useRef<LeafletMap | null>(null)
-  const watchId = useRef<number | null>(null)
+  const idleWatchId = useRef<number | null>(null)
+  const isTrackingRef = useRef(false)
+  const recordGpsPointRef = useRef<
+    ((rawPoint: TrackPoint, speed: number | null) => void) | null
+  >(null)
   const nativeWatchId = useRef<string | null>(null)
   const lastZoneToggle = useRef<{ id: string; at: number } | null>(null)
+  const routeShareRef = useRef<HTMLElement | null>(null)
   const gpsSamples = useRef<TrackPoint[]>([])
   const followUserRef = useRef(true)
   const pullStart = useRef<{ x: number; y: number } | null>(null)
@@ -608,6 +640,62 @@ function App() {
   }, [followUser])
 
   useEffect(() => {
+    isTrackingRef.current = isTracking
+  }, [isTracking])
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => mapRef.current?.invalidateSize(), 260)
+    return () => window.clearTimeout(timer)
+  }, [isSidebarCollapsed])
+
+  useEffect(() => {
+    if (Capacitor.isNativePlatform() || !navigator.geolocation) return
+
+    idleWatchId.current = navigator.geolocation.watchPosition(
+      ({ coords, timestamp }) => {
+        setGpsError('')
+        const point: TrackPoint = {
+          lat: coords.latitude,
+          lng: coords.longitude,
+          accuracy: coords.accuracy,
+          timestamp,
+        }
+        if (isTrackingRef.current) {
+          recordGpsPointRef.current?.(point, coords.speed)
+          return
+        }
+        setLivePoint(point)
+        setGpsAccuracy(coords.accuracy)
+        setLiveSpeed(coords.speed)
+        if (coords.accuracy <= 60 && followUserRef.current && mapRef.current) {
+          mapRef.current.setView(
+            [point.lat, point.lng],
+            Math.max(mapRef.current.getZoom(), 16),
+            { animate: true },
+          )
+        }
+      },
+      (error) => {
+        if (error.code === error.PERMISSION_DENIED) {
+          setGpsError('Allow precise location to show your live position.')
+          isTrackingRef.current = false
+          setIsTracking(false)
+        } else if (isTrackingRef.current) {
+          setGpsError(error.message || 'Waiting for the next GPS update.')
+        }
+      },
+      { enableHighAccuracy: true, maximumAge: 1000, timeout: 30000 },
+    )
+
+    return () => {
+      if (idleWatchId.current !== null) {
+        navigator.geolocation.clearWatch(idleWatchId.current)
+        idleWatchId.current = null
+      }
+    }
+  }, [])
+
+  useEffect(() => {
     navigator.storage?.persist?.().catch(() => {
       // Browser storage still works when durable-storage permission is unavailable.
     })
@@ -615,7 +703,6 @@ function App() {
 
   useEffect(() => {
     return () => {
-      if (watchId.current !== null) navigator.geolocation.clearWatch(watchId.current)
       if (nativeWatchId.current !== null) {
         void NativeBackgroundGeolocation.removeWatcher({ id: nativeWatchId.current })
       }
@@ -720,12 +807,7 @@ function App() {
   }, [query])
 
   const routeDistance = useMemo(
-    () =>
-      activeProject.track.reduce(
-        (total, point, index, track) =>
-          index === 0 ? 0 : total + distanceMeters(track[index - 1], point),
-        0,
-      ),
+    () => trackDistance(activeProject.track),
     [activeProject.track],
   )
 
@@ -990,6 +1072,32 @@ function App() {
     )
   }
 
+  const updateApp = async () => {
+    if (isTracking || isUpdatingApp) return
+    setIsUpdatingApp(true)
+    setGpsError('')
+    try {
+      const response = await fetch(window.location.href, { cache: 'no-store' })
+      if (!response.ok) throw new Error('The hosted app is unavailable.')
+      if ('serviceWorker' in navigator) {
+        const registrations = await navigator.serviceWorker.getRegistrations()
+        await Promise.all(registrations.map((registration) => registration.update()))
+      }
+      if ('caches' in window) {
+        const keys = await caches.keys()
+        await Promise.all(
+          keys
+            .filter((key) => key.startsWith('coverly-shell-'))
+            .map((key) => caches.delete(key)),
+        )
+      }
+      window.location.reload()
+    } catch {
+      setIsUpdatingApp(false)
+      setGpsError('Could not update. Check your internet connection and try again.')
+    }
+  }
+
   const recordGpsPoint = (rawPoint: TrackPoint, speed: number | null) => {
     setLivePoint(rawPoint)
     setGpsAccuracy(rawPoint.accuracy)
@@ -1026,12 +1134,12 @@ function App() {
       }),
     )
   }
+  useEffect(() => {
+    recordGpsPointRef.current = recordGpsPoint
+  })
 
   const stopTracking = () => {
-    if (watchId.current !== null) {
-      navigator.geolocation.clearWatch(watchId.current)
-      watchId.current = null
-    }
+    isTrackingRef.current = false
     if (nativeWatchId.current !== null) {
       void NativeBackgroundGeolocation.removeWatcher({ id: nativeWatchId.current })
       nativeWatchId.current = null
@@ -1203,6 +1311,7 @@ function App() {
       return
     }
     setGpsError('')
+    isTrackingRef.current = true
     setIsTracking(true)
     setFollowUser(true)
     setIsTerritoryMode(false)
@@ -1230,6 +1339,7 @@ function App() {
           },
           (location, error) => {
             if (error) {
+              isTrackingRef.current = false
               setGpsError(
                 error.code === 'NOT_AUTHORIZED'
                   ? 'Allow precise location in Android settings to track your route.'
@@ -1251,6 +1361,7 @@ function App() {
           },
         )
       } catch (error) {
+        isTrackingRef.current = false
         setIsTracking(false)
         setGpsError(
           error instanceof Error ? error.message : 'Could not start Android background GPS.',
@@ -1259,24 +1370,7 @@ function App() {
       return
     }
 
-    watchId.current = navigator.geolocation.watchPosition(
-      ({ coords, timestamp }) => {
-        recordGpsPoint(
-          {
-            lat: coords.latitude,
-            lng: coords.longitude,
-            accuracy: coords.accuracy,
-            timestamp,
-          },
-          coords.speed,
-        )
-      },
-      (error) => {
-        setGpsError(error.message || 'GPS tracking stopped.')
-        stopTracking()
-      },
-      { enableHighAccuracy: true, maximumAge: 0, timeout: 30000 },
-    )
+    if (livePoint) recordGpsPoint(livePoint, liveSpeed)
   }
 
   const changeActiveProject = (projectId: string) => {
@@ -1292,6 +1386,37 @@ function App() {
     changeActiveProject(project.id)
     setShowProjectMenu(false)
     setTab('areas')
+  }
+
+  const selectHistory = (projectId: string) => {
+    if (projectId === activeId) return
+    stopTracking()
+    const project = projects.find((item) => item.id === projectId)
+    changeActiveProject(projectId)
+    setShareMessage('')
+    setRouteCodeInput('')
+    const lastPoint = project
+      ? project.track[project.track.length - 1]
+      : undefined
+    if (lastPoint) setFocus({ lat: lastPoint.lat, lng: lastPoint.lng, zoom: 14 })
+  }
+
+  const startNewHistory = () => {
+    stopTracking()
+    const fresh = newProject()
+    const project: Project = {
+      ...fresh,
+      name: `History ${projects.length + 1} · ${new Date(fresh.createdAt).toLocaleDateString([], {
+        day: 'numeric',
+        month: 'short',
+      })}`,
+      zones: activeProject.zones.map((zone) => ({ ...zone })),
+    }
+    setProjects((current) => [...current, project])
+    changeActiveProject(project.id)
+    setShareMessage('')
+    setRouteCodeInput('')
+    setTab('map')
   }
 
   const deleteProject = (id: string) => {
@@ -1399,22 +1524,52 @@ function App() {
             </div>
           )}
         </div>
-        <div className={`live-badge ${isTracking ? 'active' : ''}`}>
-          <span />
-          {isTracking ? 'GPS live' : 'GPS paused'}
+        <div className="topbar-actions">
+          <button
+            type="button"
+            className="app-update-button"
+            disabled={isUpdatingApp || isTracking}
+            onClick={() => void updateApp()}
+            title={isTracking ? 'Pause tracking before updating' : 'Update app'}
+            aria-label={isTracking ? 'Pause tracking before updating' : 'Update app'}
+          >
+            <RefreshCw size={15} className={isUpdatingApp ? 'spinning' : ''} />
+            <span>{isUpdatingApp ? 'Updating…' : 'Update'}</span>
+          </button>
+          <div className={`live-badge ${isTracking || (livePoint && livePoint.accuracy <= 60) ? 'active' : ''}`}>
+            <span />
+            {isTracking ? 'Route recording' : livePoint ? 'Location live' : 'GPS ready'}
+          </div>
         </div>
       </header>
 
-      <section className="workspace">
+      <section className={`workspace ${isSidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
+        {tab !== 'map' && (
+          <button
+            type="button"
+            className="panel-dismiss-layer"
+            onClick={() => setTab('map')}
+            aria-label="Close open panel"
+          />
+        )}
         <aside className={`side-panel ${tab === 'map' ? 'map-overview-panel' : ''}`}>
+          <button
+            type="button"
+            className="sidebar-toggle sidebar-close"
+            onClick={() => setIsSidebarCollapsed(true)}
+            aria-label="Close sidebar"
+            title="Close sidebar"
+          >
+            <ChevronLeft size={18} />
+          </button>
           <nav className="panel-tabs">
             <button className={tab === 'map' ? 'active' : ''} onClick={() => setTab('map')}>
               <MapIcon size={18} /> Map
             </button>
-            <button className={tab === 'areas' ? 'active' : ''} onClick={() => setTab('areas')}>
+            <button className={tab === 'areas' ? 'active' : ''} onClick={() => setTab(tab === 'areas' ? 'map' : 'areas')}>
               <Layers3 size={18} /> Areas
             </button>
-            <button className={tab === 'history' ? 'active' : ''} onClick={() => setTab('history')}>
+            <button className={tab === 'history' ? 'active' : ''} onClick={() => setTab(tab === 'history' ? 'map' : 'history')}>
               <History size={18} /> History
             </button>
           </nav>
@@ -1596,6 +1751,30 @@ function App() {
                   <div><span className="eyebrow">Saved locally</span><h1>Route history</h1></div>
                   <History size={21} />
                 </div>
+                <section className="history-switcher">
+                  <div className="history-switcher-title">
+                    <strong>Choose journey</strong>
+                    <span>{projects.length} saved</span>
+                  </div>
+                  <select
+                    value={activeId}
+                    onChange={(event) => selectHistory(event.target.value)}
+                    aria-label="Choose saved journey history"
+                  >
+                    {projects.map((project, index) => (
+                      <option value={project.id} key={project.id}>
+                        History {index + 1} · {formatDistance(trackDistance(project.track))} · {project.markers.length} flags
+                      </option>
+                    ))}
+                  </select>
+                  <button type="button" onClick={startNewHistory}>
+                    <Route size={16} />
+                    {activeProject.track.length
+                      ? 'End current & start new history'
+                      : 'Start new history'}
+                  </button>
+                  <small>Each journey keeps its own path, flags and sharing code.</small>
+                </section>
                 <div className="history-summary">
                   <div className="history-icon"><Activity size={24} /></div>
                   <div>
@@ -1603,6 +1782,33 @@ function App() {
                     <span>GPS points recorded</span>
                   </div>
                 </div>
+                {activeProject.track.length > 0 && (
+                  <div className="history-quick-actions">
+                    <button
+                      type="button"
+                      className="continue-route-button"
+                      onClick={() => {
+                        setTab('map')
+                        if (!isTracking) void startTracking()
+                      }}
+                    >
+                      <Play size={17} fill="currentColor" />
+                      {isTracking ? 'Return to tracking' : 'Continue this route'}
+                    </button>
+                    <button
+                      type="button"
+                      className="share-route-jump"
+                      onClick={() =>
+                        routeShareRef.current?.scrollIntoView({
+                          behavior: 'smooth',
+                          block: 'start',
+                        })
+                      }
+                    >
+                      <Route size={16} /> 6-digit share
+                    </button>
+                  </div>
+                )}
                 <div className="history-list">
                   <div><span>Route distance</span><strong>{formatDistance(routeDistance)}</strong></div>
                   <div><span>Tracking duration</span><strong>{formatDuration(sessionDuration)}</strong></div>
@@ -1663,29 +1869,7 @@ function App() {
                     ))}
                   </section>
                 )}
-                {activeProject.track.length > 0 && (
-                  <div className="history-actions">
-                    <button
-                      type="button"
-                      className="continue-route-button"
-                      onClick={() => {
-                        setTab('map')
-                        if (!isTracking) void startTracking()
-                      }}
-                    >
-                      <Play size={17} fill="currentColor" />
-                      {isTracking ? 'Return to live tracking' : 'Continue this route'}
-                    </button>
-                    <button
-                      type="button"
-                      className="danger-button"
-                      onClick={resetRoute}
-                    >
-                      <Trash2 size={17} /> Clear route history
-                    </button>
-                  </div>
-                )}
-                <section className="route-share-card">
+                <section className="route-share-card" ref={routeShareRef}>
                   <div className="route-share-title">
                     <span><Route size={17} /></span>
                     <div>
@@ -1751,11 +1935,31 @@ function App() {
                     Anyone with the code can open this location history for seven days.
                   </small>
                 </section>
+                {activeProject.track.length > 0 && (
+                  <button
+                    type="button"
+                    className="danger-button"
+                    onClick={resetRoute}
+                  >
+                    <Trash2 size={17} /> Clear route history
+                  </button>
+                )}
                 <p className="privacy-note">Locations remain on this device unless you create a temporary route code.</p>
               </>
             )}
           </div>
         </aside>
+        {isSidebarCollapsed && (
+          <button
+            type="button"
+            className="sidebar-toggle sidebar-open"
+            onClick={() => setIsSidebarCollapsed(false)}
+            aria-label="Open sidebar"
+            title="Open sidebar"
+          >
+            <ChevronRight size={18} />
+          </button>
+        )}
 
         <div className="map-wrap">
           <MapContainer
@@ -1891,16 +2095,10 @@ function App() {
               </>
             )}
             {activeProject.markers.map((marker, index) => (
-              <CircleMarker
+              <Marker
                 key={marker.id}
-                center={[marker.lat, marker.lng]}
-                radius={7}
-                pathOptions={{
-                  color: '#fff',
-                  weight: 3,
-                  fillColor: '#f59e0b',
-                  fillOpacity: 1,
-                }}
+                position={[marker.lat, marker.lng]}
+                icon={IMPORTANT_PLACE_ICON}
               >
                 <Tooltip direction="top" offset={[0, -8]}>
                   {marker.label}
@@ -1927,7 +2125,7 @@ function App() {
                     </button>
                   </div>
                 </Popup>
-              </CircleMarker>
+              </Marker>
             ))}
             {currentPoint && (
               <>
@@ -2076,13 +2274,21 @@ function App() {
             <div className="gps-readout">
               <span className={`tracking-dot ${isTracking ? 'active' : ''}`} />
               <span>
-                <strong>{isTracking ? gpsQuality : 'Ready to navigate'}</strong>
+                <strong>
+                  {isTracking
+                    ? gpsQuality
+                    : livePoint
+                      ? 'Live location ready'
+                      : 'Ready to navigate'}
+                </strong>
                 <small>
                   {isTracking
                     ? gpsAccuracy && gpsAccuracy > 60
                       ? 'Move outdoors and enable Precise Location'
                       : 'Following your position · route saves automatically'
-                    : 'Enable precise GPS, then start tracking'}
+                    : livePoint
+                      ? 'Position updates live · Start tracking to save the route'
+                      : 'Enable precise GPS, then start tracking'}
                 </small>
               </span>
             </div>
@@ -2105,15 +2311,19 @@ function App() {
 
       <nav className="mobile-nav">
         <button className={tab === 'map' ? 'active' : ''} onClick={() => setTab('map')}><MapIcon size={20} />Map</button>
-        <button className={tab === 'areas' ? 'active' : ''} onClick={() => setTab('areas')}><Layers3 size={20} />Areas</button>
+        <button className={tab === 'areas' ? 'active' : ''} onClick={() => setTab(tab === 'areas' ? 'map' : 'areas')}><Layers3 size={20} />Areas</button>
         <button
           className={`mobile-track ${isTracking ? 'active' : ''}`}
-          onClick={isTracking ? stopTracking : startTracking}
+          onClick={() => {
+            setTab('map')
+            if (isTracking) stopTracking()
+            else void startTracking()
+          }}
         >
           {isTracking ? <Square size={19} fill="currentColor" /> : <Play size={20} fill="currentColor" />}
         </button>
-        <button className={tab === 'history' ? 'active' : ''} onClick={() => setTab('history')}><History size={20} />History</button>
-        <button onClick={() => locateMe()}><LocateFixed size={20} />Locate</button>
+        <button className={tab === 'history' ? 'active' : ''} onClick={() => setTab(tab === 'history' ? 'map' : 'history')}><History size={20} />History</button>
+        <button onClick={() => { setTab('map'); locateMe() }}><LocateFixed size={20} />Locate</button>
       </nav>
     </main>
   )

@@ -185,8 +185,36 @@ button {
   cursor: pointer;
 }
 
-.live-badge {
+.topbar-actions {
   justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.app-update-button {
+  min-height: 35px;
+  padding: 0 11px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #1d4ed8;
+  font-size: 11px;
+  font-weight: 800;
+  border: 1px solid #c8d8f4;
+  border-radius: 99px;
+  background: #f2f6ff;
+  cursor: pointer;
+}
+
+.app-update-button:disabled {
+  color: #8a94a2;
+  border-color: #e0e4e9;
+  background: #f5f6f7;
+  cursor: not-allowed;
+}
+
+.live-badge {
   padding: 7px 11px;
   display: flex;
   align-items: center;
@@ -233,15 +261,21 @@ button {
 }
 
 .side-panel {
+  height: 100%;
   min-width: 0;
+  min-height: 0;
   position: relative;
   z-index: 501;
+  display: flex;
+  flex-direction: column;
+  overflow: visible;
   background: #fff;
   border-right: 1px solid #e5e7eb;
   box-shadow: 6px 0 28px rgba(34, 44, 58, 0.05);
 }
 
 .panel-tabs {
+  flex: 0 0 58px;
   height: 58px;
   padding: 0 16px;
   display: grid;
@@ -272,10 +306,13 @@ button {
 }
 
 .panel-content {
-  height: calc(100% - 58px);
+  min-height: 0;
+  flex: 1 1 auto;
   padding: 24px 20px 30px;
   box-sizing: border-box;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .panel-heading {
@@ -855,6 +892,62 @@ button {
   font-size: 8px;
 }
 
+.history-switcher {
+  padding: 12px;
+  margin-bottom: 12px;
+  display: grid;
+  gap: 8px;
+  border: 1px solid #dfe5ec;
+  border-radius: 14px;
+  background: #f8fafc;
+}
+
+.history-switcher-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.history-switcher-title strong {
+  font-size: 12px;
+}
+
+.history-switcher-title span,
+.history-switcher small {
+  color: #7e8997;
+  font-size: 9px;
+}
+
+.history-switcher select,
+.history-switcher button {
+  width: 100%;
+  min-height: 40px;
+  border-radius: 10px;
+  font: inherit;
+}
+
+.history-switcher select {
+  padding: 0 10px;
+  color: #243041;
+  font-size: 11px;
+  font-weight: 700;
+  border: 1px solid #d9e0e8;
+  background: #fff;
+}
+
+.history-switcher button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 800;
+  border: 0;
+  background: #1d4ed8;
+  cursor: pointer;
+}
+
 .history-summary {
   padding: 18px;
   display: flex;
@@ -964,8 +1057,10 @@ button {
   background: #fff7f8;
 }
 
-.history-actions {
+.history-quick-actions {
+  margin-top: 10px;
   display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
 }
 
@@ -982,6 +1077,22 @@ button {
   border: 0;
   border-radius: 11px;
   background: #0f766e;
+  cursor: pointer;
+}
+
+.share-route-jump {
+  min-height: 42px;
+  padding: 0 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  color: #1d4ed8;
+  font-size: 9px;
+  font-weight: 800;
+  border: 1px solid #bed0ef;
+  border-radius: 11px;
+  background: #eef4ff;
   cursor: pointer;
 }
 
@@ -1258,6 +1369,19 @@ button {
   border-radius: 8px;
   background: #fff2f3;
   cursor: pointer;
+}
+
+.important-place-marker {
+  border: 0 !important;
+  background: transparent !important;
+  filter: drop-shadow(0 4px 5px rgba(113, 77, 8, 0.3));
+}
+
+.important-place-marker svg {
+  width: 32px;
+  height: 38px;
+  display: block;
+  overflow: visible;
 }
 
 .popup-number {
@@ -1734,7 +1858,60 @@ button {
   box-shadow: 0 7px 16px rgba(207, 66, 80, 0.22);
 }
 
-.mobile-nav { display: none; }
+.sidebar-toggle,
+.panel-dismiss-layer,
+.mobile-nav {
+  display: none;
+}
+
+@media (min-width: 761px) {
+  .workspace {
+    position: relative;
+    transition: grid-template-columns 220ms ease;
+  }
+
+  .workspace.sidebar-collapsed {
+    grid-template-columns: 0 1fr;
+  }
+
+  .workspace.sidebar-collapsed .side-panel {
+    visibility: hidden;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .sidebar-toggle {
+    width: 31px;
+    height: 46px;
+    z-index: 900;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #526173;
+    border: 1px solid #dbe1e8;
+    background: #fff;
+    box-shadow: 0 5px 18px rgba(30, 41, 59, 0.16);
+    cursor: pointer;
+  }
+
+  .sidebar-close {
+    position: absolute;
+    top: 50%;
+    right: -31px;
+    transform: translateY(-50%);
+    border-left: 0;
+    border-radius: 0 10px 10px 0;
+  }
+
+  .sidebar-open {
+    position: absolute;
+    top: 50%;
+    left: 0;
+    transform: translateY(-50%);
+    border-left: 0;
+    border-radius: 0 10px 10px 0;
+  }
+}
 
 @media (max-width: 760px) {
   .app-shell { min-height: 560px; }
@@ -1751,6 +1928,15 @@ button {
   .project-button span { max-width: calc(100% - 20px); font-size: 12px; }
   .project-button small { font-size: 7px; }
   .project-menu { width: min(285px, calc(100vw - 24px)); }
+  .topbar-actions { gap: 5px; }
+  .app-update-button {
+    width: 35px;
+    height: 35px;
+    min-height: 35px;
+    padding: 0;
+    justify-content: center;
+  }
+  .app-update-button span { display: none; }
   .live-badge { width: 35px; height: 35px; padding: 0; justify-content: center; box-sizing: border-box; }
   .live-badge { font-size: 0; }
   .live-badge span { width: 9px; height: 9px; }
@@ -1763,7 +1949,8 @@ button {
   }
   .side-panel {
     width: min(360px, calc(100% - 24px));
-    max-height: 72%;
+    height: min(72%, 620px);
+    max-height: calc(100% - 24px);
     position: absolute;
     z-index: 700;
     left: 12px;
@@ -1772,6 +1959,15 @@ button {
     border: 1px solid #e2e5e9;
     border-radius: 17px;
     box-shadow: 0 15px 45px rgba(31, 41, 55, 0.2);
+  }
+  .panel-dismiss-layer {
+    display: block;
+    position: absolute;
+    z-index: 650;
+    inset: 0;
+    padding: 0;
+    border: 0;
+    background: rgba(15, 23, 42, 0.08);
   }
   .side-panel.map-overview-panel {
     display: none;
@@ -1790,9 +1986,10 @@ button {
   }
   .panel-tabs { display: none; }
   .panel-content {
+    min-height: 0;
     height: auto;
-    max-height: calc(72svh - 80px);
-    padding: 23px 16px 22px;
+    max-height: none;
+    padding: 23px 16px calc(30px + env(safe-area-inset-bottom));
   }
   .panel-heading { margin-bottom: 14px; }
   .panel-heading h1 { font-size: 20px; }
