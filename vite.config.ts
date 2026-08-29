@@ -3,6 +3,6 @@ import { defineConfig } from 'vite'
 
 // https://vite.dev/config/
 export default defineConfig({
-  base: process.env.GITHUB_ACTIONS ? '/area-coverage-tracker/' : '/',
+  base: '/area-coverage-tracker/',
   plugins: [react()],
 })
