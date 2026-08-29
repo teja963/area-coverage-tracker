@@ -1096,6 +1096,58 @@ button {
   cursor: pointer;
 }
 
+.road-align-card {
+  padding: 11px;
+  margin-top: 9px;
+  display: grid;
+  gap: 8px;
+  border: 1px solid #cce3d7;
+  border-radius: 12px;
+  background: #f2faf6;
+}
+
+.road-align-card > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.road-align-card strong {
+  color: #176347;
+  font-size: 11px;
+}
+
+.road-align-card small,
+.road-align-card p {
+  color: #6c7f75;
+  font-size: 8px;
+}
+
+.road-align-card button {
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: #176347;
+  font-size: 9px;
+  font-weight: 800;
+  border: 1px solid #b9dacb;
+  border-radius: 9px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.road-align-card button:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+
+.road-align-card p {
+  margin: 0;
+  line-height: 1.4;
+}
+
 .route-share-card {
   padding: 13px;
   margin-top: 12px;
