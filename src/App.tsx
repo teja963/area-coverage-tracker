@@ -143,7 +143,6 @@ const ROUTE_SHARE_API = 'https://coverly-route-share.panasateja123.workers.dev'
 const ROAD_ROUTER_API = 'https://router.project-osrm.org'
 const ROAD_SNAP_MIN_SPEED = 2
 const ROAD_SNAP_MAX_DISTANCE = 35
-const ROAD_SNAP_INTERVAL = 2200
 const IMPORTANT_PLACE_ICON = divIcon({
   className: 'important-place-marker',
   html: `
@@ -433,36 +432,6 @@ function trackDistance(track: TrackPoint[]) {
   )
 }
 
-type RoadLocation = { lat: number; lng: number; distance: number }
-
-async function nearestRoad(
-  point: Pick<TrackPoint, 'lat' | 'lng'>,
-  signal?: AbortSignal,
-): Promise<RoadLocation | null> {
-  const response = await fetch(
-    `${ROAD_ROUTER_API}/nearest/v1/driving/${point.lng.toFixed(6)},${point.lat.toFixed(6)}?number=1`,
-    { signal },
-  )
-  if (!response.ok) return null
-  const result = await response.json() as {
-    code?: string
-    waypoints?: Array<{ location?: [number, number]; distance?: number }>
-  }
-  const match = result.waypoints?.[0]
-  if (
-    result.code !== 'Ok' ||
-    !match?.location ||
-    typeof match.distance !== 'number'
-  ) {
-    return null
-  }
-  return {
-    lat: match.location[1],
-    lng: match.location[0],
-    distance: match.distance,
-  }
-}
-
 function inferredTrackSpeed(track: TrackPoint[], index: number) {
   const previous = track[index - 1]
   const next = track[index + 1]
@@ -604,7 +573,6 @@ function App() {
   const [isTracking, setIsTracking] = useState(false)
   const [followUser, setFollowUser] = useState(true)
   const [livePoint, setLivePoint] = useState<TrackPoint | null>(null)
-  const [roadSnappedPoint, setRoadSnappedPoint] = useState<RoadLocation | null>(null)
   const [gpsAccuracy, setGpsAccuracy] = useState<number | null>(null)
   const [liveSpeed, setLiveSpeed] = useState<number | null>(null)
   const [isResolvingBoundary, setIsResolvingBoundary] = useState(false)
@@ -644,9 +612,6 @@ function App() {
   const followUserRef = useRef(true)
   const pullStart = useRef<{ x: number; y: number } | null>(null)
   const pullDistanceRef = useRef(0)
-  const lastRawPointRef = useRef<TrackPoint | null>(null)
-  const lastRoadSnapAt = useRef(0)
-  const roadSnapAbort = useRef<AbortController | null>(null)
 
   const activeProject = projects.find((project) => project.id === activeId) ?? projects[0]
 
@@ -741,8 +706,6 @@ function App() {
           recordGpsPointRef.current?.(point, coords.speed)
           return
         }
-        lastRawPointRef.current = point
-        setRoadSnappedPoint(null)
         setLivePoint(point)
         setGpsAccuracy(coords.accuracy)
         setLiveSpeed(coords.speed)
@@ -1178,62 +1141,9 @@ function App() {
   }
 
   const recordGpsPoint = (rawPoint: TrackPoint, speed: number | null) => {
-    const previousRaw = lastRawPointRef.current
-    const elapsedSeconds = previousRaw
-      ? (rawPoint.timestamp - previousRaw.timestamp) / 1000
-      : 0
-    const measuredSpeed =
-      speed ??
-      (previousRaw && elapsedSeconds > 0
-        ? distanceMeters(previousRaw, rawPoint) / elapsedSeconds
-        : 0)
-    lastRawPointRef.current = rawPoint
     setLivePoint(rawPoint)
     setGpsAccuracy(rawPoint.accuracy)
-    setLiveSpeed(measuredSpeed)
-
-    const shouldSnapToRoad =
-      measuredSpeed >= ROAD_SNAP_MIN_SPEED && rawPoint.accuracy <= 35
-    if (!shouldSnapToRoad) {
-      roadSnapAbort.current?.abort()
-      setRoadSnappedPoint(null)
-    } else if (rawPoint.timestamp - lastRoadSnapAt.current >= ROAD_SNAP_INTERVAL) {
-      lastRoadSnapAt.current = rawPoint.timestamp
-      roadSnapAbort.current?.abort()
-      const controller = new AbortController()
-      const projectId = activeId
-      roadSnapAbort.current = controller
-      void nearestRoad(rawPoint, controller.signal)
-        .then((match) => {
-          if (
-            !isTrackingRef.current ||
-            !match ||
-            match.distance > ROAD_SNAP_MAX_DISTANCE
-          ) {
-            setRoadSnappedPoint(null)
-            return
-          }
-          setRoadSnappedPoint(match)
-          setProjects((current) =>
-            current.map((project) =>
-              project.id === projectId
-                ? {
-                    ...project,
-                    track: project.track.map((point) =>
-                      point.timestamp === rawPoint.timestamp
-                        ? { ...point, roadLat: match.lat, roadLng: match.lng }
-                        : point,
-                    ),
-                  }
-                : project,
-            ),
-          )
-        })
-        .catch((error) => {
-          if (error instanceof DOMException && error.name === 'AbortError') return
-          setRoadSnappedPoint(null)
-        })
-    }
+    setLiveSpeed(speed)
 
     if (rawPoint.accuracy > 60) return
 
@@ -1272,9 +1182,6 @@ function App() {
 
   const stopTracking = () => {
     isTrackingRef.current = false
-    roadSnapAbort.current?.abort()
-    roadSnapAbort.current = null
-    setRoadSnappedPoint(null)
     if (nativeWatchId.current !== null) {
       void NativeBackgroundGeolocation.removeWatcher({ id: nativeWatchId.current })
       nativeWatchId.current = null
@@ -1335,7 +1242,7 @@ function App() {
       )
       setRoadAlignMessage(
         alignedCount
-          ? `${alignedCount} moving points aligned. Original GPS is preserved.`
+          ? `${alignedCount} moving points aligned. Unmatched raw GPS remains visible as dots.`
           : 'No safe nearby road matches were found. Original GPS is unchanged.',
       )
     } catch {
@@ -1578,7 +1485,6 @@ function App() {
     setVisibleZoneIds(new Set())
     setIsTerritoryMode(false)
     setRoadAlignMessage('')
-    setRoadSnappedPoint(null)
   }
 
   const createProject = () => {
@@ -1633,22 +1539,38 @@ function App() {
     if (activeId === id) changeActiveProject(remaining[0].id)
   }
 
-  const trackPositions: LatLngExpression[] = activeProject.track.map((point) => [
-    point.roadLat ?? point.lat,
-    point.roadLng ?? point.lng,
-  ])
   const hasRoadAlignment = activeProject.track.some(
     (point) => point.roadLat !== undefined && point.roadLng !== undefined,
   )
+  const rawTrackPositions: LatLngExpression[] = activeProject.track.map((point) => [
+    point.lat,
+    point.lng,
+  ])
+  const alignedTrackSegments = (() => {
+    const segments: LatLngExpression[][] = []
+    let segment: LatLngExpression[] = []
+    activeProject.track.forEach((point) => {
+      if (point.roadLat !== undefined && point.roadLng !== undefined) {
+        segment.push([point.roadLat, point.roadLng])
+        return
+      }
+      if (segment.length > 1) segments.push(segment)
+      segment = []
+    })
+    if (segment.length > 1) segments.push(segment)
+    return segments
+  })()
+  const trackSegments =
+    hasRoadAlignment
+      ? alignedTrackSegments
+      : rawTrackPositions.length > 1
+        ? [rawTrackPositions]
+        : []
+  const rawPointStep = Math.max(1, Math.ceil(activeProject.track.length / 700))
+  const rawPointSamples = hasRoadAlignment
+    ? activeProject.track.filter((_, index) => index % rawPointStep === 0)
+    : []
   const currentPoint = livePoint ?? activeProject.track[activeProject.track.length - 1]
-  const displayedCurrentPoint =
-    isTracking && currentPoint && roadSnappedPoint
-      ? {
-          ...currentPoint,
-          lat: roadSnappedPoint.lat,
-          lng: roadSnappedPoint.lng,
-        }
-      : currentPoint
   const currentWard = useMemo(
     () =>
       isTracking && livePoint && livePoint.accuracy <= 60 && officialWards
@@ -2026,7 +1948,7 @@ function App() {
                   <section className="road-align-card">
                     <div>
                       <strong>Road-aligned display</strong>
-                      <small>Moving sections only · original GPS stays saved</small>
+                      <small>Matched roads become lines · raw GPS remains as dots</small>
                     </div>
                     <button
                       type="button"
@@ -2329,12 +2251,32 @@ function App() {
               </CircleMarker>
               )
             ))}
-            {trackPositions.length > 1 && (
-              <>
-                <Polyline positions={trackPositions} pathOptions={{ color: '#17b88a', weight: 13, opacity: 0.2, lineCap: 'round', lineJoin: 'round' }} />
-                <Polyline positions={trackPositions} pathOptions={{ color: '#078765', weight: 4, opacity: 0.95, lineCap: 'round', lineJoin: 'round' }} />
-              </>
-            )}
+            {trackSegments.flatMap((positions, index) => [
+              <Polyline
+                key={`route-glow-${index}`}
+                positions={positions}
+                pathOptions={{ color: '#17b88a', weight: 13, opacity: 0.2, lineCap: 'round', lineJoin: 'round' }}
+              />,
+              <Polyline
+                key={`route-line-${index}`}
+                positions={positions}
+                pathOptions={{ color: '#078765', weight: 4, opacity: 0.95, lineCap: 'round', lineJoin: 'round' }}
+              />,
+            ])}
+            {rawPointSamples.map((point, index) => (
+              <CircleMarker
+                key={`raw-point-${point.timestamp}-${index}`}
+                center={[point.lat, point.lng]}
+                radius={2}
+                interactive={false}
+                pathOptions={{
+                  color: '#0f766e',
+                  weight: 1,
+                  fillColor: '#34d399',
+                  fillOpacity: 0.65,
+                }}
+              />
+            ))}
             {activeProject.markers.map((marker, index) => (
               <Marker
                 key={marker.id}
@@ -2376,22 +2318,17 @@ function App() {
                   pathOptions={{ color: '#2385f5', weight: 1, fillColor: '#2385f5', fillOpacity: 0.1 }}
                 />
                 <CircleMarker
-                  center={[
-                    displayedCurrentPoint?.lat ?? currentPoint.lat,
-                    displayedCurrentPoint?.lng ?? currentPoint.lng,
-                  ]}
-                  radius={roadSnappedPoint && isTracking ? 6 : 5}
+                  center={[currentPoint.lat, currentPoint.lng]}
+                  radius={5}
                   pathOptions={{
                     color: '#fff',
                     weight: 2,
-                    fillColor: roadSnappedPoint && isTracking ? '#16a34a' : '#2385f5',
+                    fillColor: '#2385f5',
                     fillOpacity: 1,
                   }}
                 >
                   <Tooltip direction="top" offset={[0, -7]}>
-                    {roadSnappedPoint && isTracking
-                      ? `Road aligned · ${Math.round(roadSnappedPoint.distance)} m from raw GPS`
-                      : 'Raw GPS position'}
+                    Phone GPS position
                   </Tooltip>
                 </CircleMarker>
               </>
