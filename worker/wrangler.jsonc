@@ -1,0 +1,13 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "coverly-route-share",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-29",
+  "workers_dev": true,
+  "kv_namespaces": [
+    {
+      "binding": "ROUTE_SHARES",
+      "id": "83d513b74d4f4599adf92312c597e594"
+    }
+  ]
+}

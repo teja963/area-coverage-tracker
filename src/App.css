@@ -895,6 +895,199 @@ button {
 .history-list span { color: #87919f; }
 .history-list strong { max-width: 62%; text-align: right; }
 
+.marker-history {
+  padding: 10px;
+  margin-bottom: 12px;
+  display: grid;
+  gap: 7px;
+  border: 1px solid #f0dfb5;
+  border-radius: 13px;
+  background: #fffbeb;
+}
+
+.marker-history-title,
+.marker-history-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.marker-history-title > span,
+.marker-history-item > span {
+  width: 27px;
+  height: 27px;
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 800;
+  border-radius: 8px;
+  background: #f59e0b;
+}
+
+.marker-history-title strong { color: #754f0b; font-size: 11px; }
+
+.marker-history-item input {
+  min-width: 0;
+  height: 30px;
+  flex: 1;
+  padding: 0 8px;
+  color: #5f4a21;
+  font-size: 10px;
+  border: 1px solid #ead9ae;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.8);
+}
+
+.marker-history-item button {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  color: #9a670c;
+  border: 1px solid #ead9ae;
+  border-radius: 8px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.history-actions {
+  display: grid;
+  gap: 8px;
+}
+
+.continue-route-button {
+  width: 100%;
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+  border: 0;
+  border-radius: 11px;
+  background: #0f766e;
+  cursor: pointer;
+}
+
+.route-share-card {
+  padding: 13px;
+  margin-top: 12px;
+  display: grid;
+  gap: 10px;
+  border: 1px solid #d9e4f2;
+  border-radius: 14px;
+  background: #f7faff;
+}
+
+.route-share-title {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.route-share-title > span {
+  width: 31px;
+  height: 31px;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  border-radius: 9px;
+  background: #2563eb;
+}
+
+.route-share-title > div { min-width: 0; display: flex; flex-direction: column; }
+.route-share-title strong { color: #334155; font-size: 11px; }
+.route-share-title small { color: #8491a2; font-size: 8px; }
+
+.active-route-code {
+  padding: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-radius: 10px;
+  background: #e9f0ff;
+}
+
+.active-route-code button {
+  color: #1d4ed8;
+  font-size: 20px;
+  font-weight: 850;
+  letter-spacing: 0.16em;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+
+.active-route-code small {
+  max-width: 105px;
+  color: #718096;
+  font-size: 7px;
+  line-height: 1.4;
+  text-align: right;
+}
+
+.create-route-code,
+.route-code-form button {
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 800;
+  border: 0;
+  border-radius: 9px;
+  background: #2563eb;
+  cursor: pointer;
+}
+
+.create-route-code:disabled,
+.route-code-form button:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
+.route-code-form {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 7px;
+}
+
+.route-code-form input {
+  min-width: 0;
+  height: 36px;
+  padding: 0 10px;
+  color: #334155;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  border: 1px solid #cdd9e8;
+  border-radius: 9px;
+  background: #fff;
+}
+
+.route-code-form button { padding: 0 12px; }
+
+.route-share-message {
+  margin: 0;
+  color: #52647a;
+  font-size: 8px;
+  line-height: 1.45;
+}
+
+.route-share-warning {
+  color: #9a6d16;
+  font-size: 7px;
+  line-height: 1.45;
+}
+
+.spinning { animation: refresh-spin 0.8s linear infinite; }
+
 .danger-button {
   width: 100%;
   color: #be4653;
@@ -1021,6 +1214,38 @@ button {
   display: flex;
   align-items: center;
   gap: 11px;
+}
+
+.marker-popup {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 9px;
+}
+
+.marker-popup > span {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  border-radius: 9px;
+  background: #f59e0b;
+}
+
+.marker-popup > div { min-width: 0; display: flex; flex-direction: column; }
+.marker-popup strong { color: #3b4654; font-size: 11px; }
+.marker-popup small { color: #8a94a1; font-size: 8px; }
+.marker-popup button {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  color: #c44652;
+  border: 0;
+  border-radius: 8px;
+  background: #fff2f3;
+  cursor: pointer;
 }
 
 .popup-number {
@@ -1227,6 +1452,45 @@ button {
   display: none;
 }
 
+.live-territory-chip {
+  max-width: min(330px, calc(100% - 32px));
+  min-height: 42px;
+  padding: 7px 11px;
+  position: absolute;
+  z-index: 510;
+  top: 70px;
+  left: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #fff;
+  border-radius: 11px;
+  background: rgba(15, 118, 110, 0.94);
+  box-shadow: 0 8px 24px rgba(15, 118, 110, 0.24);
+  backdrop-filter: blur(10px);
+}
+
+.live-territory-chip > span {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.live-territory-chip small {
+  font-size: 7px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  opacity: 0.75;
+  text-transform: uppercase;
+}
+
+.live-territory-chip strong {
+  overflow: hidden;
+  font-size: 10px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .tap-hint {
   padding: 10px 15px;
   position: absolute;
@@ -1286,7 +1550,8 @@ button {
 
 .add-area-button,
 .locate-button,
-.reset-route-button {
+.reset-route-button,
+.mark-place-button {
   height: 42px;
   display: flex;
   align-items: center;
@@ -1318,6 +1583,17 @@ button {
   color: #d13f52;
   border: 1px solid #f0cbd1;
   background: rgba(255, 250, 251, 0.97);
+}
+
+.mark-place-button {
+  padding: 0 12px;
+  gap: 6px;
+  color: #714d08;
+  font-size: 10px;
+  font-weight: 800;
+  border: 1px solid #efd58f;
+  background: rgba(255, 251, 235, 0.97);
+  box-shadow: 0 7px 20px rgba(180, 120, 10, 0.16);
 }
 
 .add-area-button.active {
@@ -1556,6 +1832,11 @@ button {
   .mobile-map-stats strong {
     color: #0f766e;
     font-size: 9px;
+  }
+  .live-territory-chip {
+    max-width: calc(100% - 22px);
+    top: 151px;
+    left: 11px;
   }
   .map-actions { top: 62px; right: 11px; }
   .add-area-button { height: 42px; }

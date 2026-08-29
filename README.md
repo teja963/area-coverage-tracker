@@ -8,15 +8,23 @@ visited routes in real time.
 - View all 369 official 2025 Greater Bengaluru ward demarcations.
 - Search or tap a ward to select its exact irregular territory.
 - Use verified OpenStreetMap polygons outside the official Bengaluru dataset.
-- Live route recording and an adaptive coverage grid.
+- Continuous route recording that resumes the same saved path.
+- Automatic highlighting of only the territory containing the live GPS point.
+- Persistent important-place markers during a journey.
+- Six-digit route transfer codes that expire after seven days.
 - Multiple locally saved projects with history and statistics.
 - Responsive phone and desktop layouts.
-- No account, backend, or paid map key.
+- No paid map key or billing requirement.
 
-Location data stays in the browser. OpenStreetMap provides the map and search.
+Location data stays in the browser unless the user creates a temporary transfer
+code. OpenStreetMap provides the map and search.
 The Bengaluru polygons come from the public-domain
 [GBA Final Wards Map, December 2025](https://data.opencity.in/dataset/gba-wards-delimitation-2025)
 published through OpenCity.
+
+Temporary route codes use a free Cloudflare Worker and KV namespace configured
+under `worker/`. Anyone with a route code can open that snapshot until it
+expires.
 
 ## Run
 

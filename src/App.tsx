@@ -19,6 +19,7 @@ import {
   Activity,
   ChevronDown,
   Clock3,
+  Flag,
   History,
   Layers3,
   LocateFixed,
@@ -65,11 +66,22 @@ type TrackPoint = {
   timestamp: number
 }
 
+type JourneyMarker = {
+  id: string
+  lat: number
+  lng: number
+  label: string
+  createdAt: number
+}
+
 type Project = {
   id: string
   name: string
   zones: Zone[]
   track: TrackPoint[]
+  markers: JourneyMarker[]
+  shareCode?: string
+  shareExpiresAt?: number
   createdAt: number
   updatedAt: number
 }
@@ -122,6 +134,7 @@ const AREA_COLORS = [
   '#0891b2',
 ]
 const TERRITORY_COLORS = ['#3b82f6', '#f97316', '#22c55e', '#8b5cf6', '#f43f5e']
+const ROUTE_SHARE_API = 'https://coverly-route-share.panasateja123.workers.dev'
 
 const uid = () => crypto.randomUUID()
 
@@ -132,6 +145,7 @@ const newProject = (): Project => {
     name: 'My search area',
     zones: [],
     track: [],
+    markers: [],
     createdAt: now,
     updatedAt: now,
   }
@@ -142,7 +156,12 @@ function loadProjects(): Project[] {
     const stored = localStorage.getItem(STORAGE_KEY)
     if (stored) {
       const parsed = JSON.parse(stored) as Project[]
-      if (Array.isArray(parsed) && parsed.length) return parsed
+      if (Array.isArray(parsed) && parsed.length) {
+        return parsed.map((project) => ({
+          ...project,
+          markers: Array.isArray(project.markers) ? project.markers : [],
+        }))
+      }
     }
     const previousStored =
       localStorage.getItem(PREVIOUS_STORAGE_KEY) ||
@@ -152,6 +171,7 @@ function loadProjects(): Project[] {
       if (Array.isArray(previousProjects) && previousProjects.length) {
         const migrated = previousProjects.map((project) => ({
           ...project,
+          markers: Array.isArray(project.markers) ? project.markers : [],
           zones: project.zones.filter(
             (zone) => zone.source === 'gba' || zone.source === 'osm',
           ),
@@ -500,6 +520,10 @@ function App() {
   const [isSearching, setIsSearching] = useState(false)
   const [searchError, setSearchError] = useState('')
   const [gpsError, setGpsError] = useState('')
+  const [routeCodeInput, setRouteCodeInput] = useState('')
+  const [shareMessage, setShareMessage] = useState('')
+  const [isSharingRoute, setIsSharingRoute] = useState(false)
+  const [isImportingRoute, setIsImportingRoute] = useState(false)
   const [focus, setFocus] = useState<{ lat: number; lng: number; zoom?: number } | null>(
     null,
   )
@@ -1026,6 +1050,152 @@ function App() {
     setLiveSpeed(null)
   }
 
+  const markCurrentPlace = () => {
+    const point = livePoint ?? activeProject.track[activeProject.track.length - 1]
+    if (!point) {
+      setGpsError('Start tracking or locate yourself before marking a place.')
+      return
+    }
+    const ward = officialWards
+      ? wardAtPoint(officialWards, point.lat, point.lng)
+      : undefined
+    const markerNumber = activeProject.markers.length + 1
+    updateProject((project) => ({
+      ...project,
+      markers: [
+        ...project.markers,
+        {
+          id: uid(),
+          lat: point.lat,
+          lng: point.lng,
+          label: ward
+            ? `Important place · ${ward.properties.ward_name}`
+            : `Important place ${markerNumber}`,
+          createdAt: Date.now(),
+        },
+      ],
+    }))
+    setFocus({ lat: point.lat, lng: point.lng, zoom: 17 })
+  }
+
+  const shareRouteHistory = async () => {
+    if (!activeProject.track.length) {
+      setShareMessage('Record at least one GPS point before creating a code.')
+      return
+    }
+    setIsSharingRoute(true)
+    setShareMessage('')
+    try {
+      const response = await fetch(`${ROUTE_SHARE_API}/routes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          version: 1,
+          project: {
+            name: activeProject.name,
+            zones: activeProject.zones,
+            track: activeProject.track,
+            markers: activeProject.markers,
+            createdAt: activeProject.createdAt,
+            updatedAt: activeProject.updatedAt,
+          },
+        }),
+      })
+      const result = await response.json() as {
+        code?: string
+        expiresAt?: number
+        error?: string
+      }
+      if (!response.ok || !result.code || !result.expiresAt) {
+        throw new Error(result.error || 'Could not create a route code.')
+      }
+      updateProject((project) => ({
+        ...project,
+        shareCode: result.code,
+        shareExpiresAt: result.expiresAt,
+      }))
+      setShareMessage('Code ready. It contains a seven-day snapshot of this route.')
+    } catch (error) {
+      setShareMessage(
+        error instanceof Error ? error.message : 'Could not create a route code.',
+      )
+    } finally {
+      setIsSharingRoute(false)
+    }
+  }
+
+  const importRouteHistory = async () => {
+    const code = routeCodeInput.replace(/\D/g, '').slice(0, 6)
+    if (code.length !== 6) {
+      setShareMessage('Enter the complete six-digit route code.')
+      return
+    }
+    setIsImportingRoute(true)
+    setShareMessage('')
+    try {
+      const response = await fetch(`${ROUTE_SHARE_API}/routes/${code}`)
+      const result = await response.json() as {
+        payload?: { version?: number; project?: Partial<Project> }
+        expiresAt?: number
+        error?: string
+      }
+      const shared = result.payload?.project
+      if (
+        !response.ok ||
+        result.payload?.version !== 1 ||
+        !shared ||
+        !Array.isArray(shared.track) ||
+        !Array.isArray(shared.zones)
+      ) {
+        throw new Error(result.error || 'This route code is invalid or expired.')
+      }
+
+      const track = shared.track.filter(
+        (point): point is TrackPoint =>
+          typeof point?.lat === 'number' &&
+          Number.isFinite(point.lat) &&
+          typeof point.lng === 'number' &&
+          Number.isFinite(point.lng) &&
+          typeof point.accuracy === 'number' &&
+          typeof point.timestamp === 'number',
+      )
+      if (!track.length) throw new Error('The shared route contains no GPS points.')
+      const imported: Project = {
+        id: uid(),
+        name: `${String(shared.name || 'Shared route')} · Continued`,
+        zones: shared.zones as Zone[],
+        track,
+        markers: Array.isArray(shared.markers)
+          ? shared.markers as JourneyMarker[]
+          : [],
+        shareCode: code,
+        shareExpiresAt: result.expiresAt,
+        createdAt:
+          typeof shared.createdAt === 'number'
+            ? shared.createdAt
+            : track[0].timestamp,
+        updatedAt:
+          typeof shared.updatedAt === 'number'
+            ? shared.updatedAt
+            : track[track.length - 1].timestamp,
+      }
+      const lastPoint = track[track.length - 1]
+      setProjects((current) => [...current, imported])
+      changeActiveProject(imported.id)
+      setLivePoint(lastPoint)
+      setFocus({ lat: lastPoint.lat, lng: lastPoint.lng, zoom: 16 })
+      setRouteCodeInput('')
+      setShareMessage('Route restored. Press Continue this route to extend it.')
+      setTab('history')
+    } catch (error) {
+      setShareMessage(
+        error instanceof Error ? error.message : 'Could not restore this route.',
+      )
+    } finally {
+      setIsImportingRoute(false)
+    }
+  }
+
   const startTracking = async () => {
     const isNative = Capacitor.isNativePlatform()
     if (!isNative && !navigator.geolocation) {
@@ -1036,7 +1206,6 @@ function App() {
     setIsTracking(true)
     setFollowUser(true)
     setIsTerritoryMode(false)
-    setVisibleZoneIds(new Set())
     setGpsAccuracy(null)
     gpsSamples.current = []
 
@@ -1142,6 +1311,16 @@ function App() {
     point.lng,
   ])
   const currentPoint = livePoint ?? activeProject.track[activeProject.track.length - 1]
+  const currentWard = useMemo(
+    () =>
+      isTracking && livePoint && livePoint.accuracy <= 60 && officialWards
+        ? wardAtPoint(officialWards, livePoint.lat, livePoint.lng)
+        : undefined,
+    [isTracking, livePoint, officialWards],
+  )
+  const currentWardColor = currentWard
+    ? TERRITORY_COLORS[currentWard.properties.color_index % TERRITORY_COLORS.length]
+    : '#0f766e'
   const gpsQuality =
     gpsAccuracy === null
       ? 'Acquiring GPS'
@@ -1427,19 +1606,136 @@ function App() {
                 <div className="history-list">
                   <div><span>Route distance</span><strong>{formatDistance(routeDistance)}</strong></div>
                   <div><span>Tracking duration</span><strong>{formatDuration(sessionDuration)}</strong></div>
+                  <div><span>Important places</span><strong>{activeProject.markers.length}</strong></div>
                   <div><span>Started</span><strong>{activeProject.track.length ? new Date(activeProject.track[0].timestamp).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : 'Not started'}</strong></div>
                   <div><span>Last update</span><strong>{new Date(activeProject.updatedAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</strong></div>
                 </div>
+                {activeProject.markers.length > 0 && (
+                  <section className="marker-history">
+                    <div className="marker-history-title">
+                      <span><Flag size={16} /></span>
+                      <strong>Marked places</strong>
+                    </div>
+                    {activeProject.markers.map((marker, index) => (
+                      <div className="marker-history-item" key={marker.id}>
+                        <span>{index + 1}</span>
+                        <input
+                          value={marker.label}
+                          aria-label={`Name for marked place ${index + 1}`}
+                          onChange={(event) =>
+                            updateProject((project) => ({
+                              ...project,
+                              markers: project.markers.map((item) =>
+                                item.id === marker.id
+                                  ? { ...item, label: event.target.value }
+                                  : item,
+                              ),
+                            }))
+                          }
+                        />
+                        <button
+                          type="button"
+                          aria-label={`Show marked place ${index + 1}`}
+                          onClick={() => {
+                            setTab('map')
+                            setFocus({ lat: marker.lat, lng: marker.lng, zoom: 17 })
+                          }}
+                        >
+                          <LocateFixed size={15} />
+                        </button>
+                      </div>
+                    ))}
+                  </section>
+                )}
                 {activeProject.track.length > 0 && (
+                  <div className="history-actions">
+                    <button
+                      type="button"
+                      className="continue-route-button"
+                      onClick={() => {
+                        setTab('map')
+                        if (!isTracking) void startTracking()
+                      }}
+                    >
+                      <Play size={17} fill="currentColor" />
+                      {isTracking ? 'Return to live tracking' : 'Continue this route'}
+                    </button>
+                    <button
+                      type="button"
+                      className="danger-button"
+                      onClick={resetRoute}
+                    >
+                      <Trash2 size={17} /> Clear route history
+                    </button>
+                  </div>
+                )}
+                <section className="route-share-card">
+                  <div className="route-share-title">
+                    <span><Route size={17} /></span>
+                    <div>
+                      <strong>Continue on another device</strong>
+                      <small>Transfer this route with a six-digit code</small>
+                    </div>
+                  </div>
+                  {activeProject.shareCode && activeProject.shareExpiresAt && (
+                    <div className="active-route-code">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void navigator.clipboard?.writeText(activeProject.shareCode!)
+                          setShareMessage('Route code copied.')
+                        }}
+                        aria-label="Copy route code"
+                      >
+                        {activeProject.shareCode}
+                      </button>
+                      <small>
+                        Expires {new Date(activeProject.shareExpiresAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}
+                      </small>
+                    </div>
+                  )}
                   <button
                     type="button"
-                    className="danger-button"
-                    onClick={resetRoute}
+                    className="create-route-code"
+                    disabled={isSharingRoute || activeProject.track.length === 0}
+                    onClick={() => void shareRouteHistory()}
                   >
-                    <Trash2 size={17} /> Clear route history
+                    <RefreshCw size={15} className={isSharingRoute ? 'spinning' : ''} />
+                    {isSharingRoute ? 'Creating code…' : 'Create new route code'}
                   </button>
-                )}
-                <p className="privacy-note">Your locations stay in this browser. Nothing is uploaded to a server.</p>
+                  <form
+                    className="route-code-form"
+                    onSubmit={(event) => {
+                      event.preventDefault()
+                      void importRouteHistory()
+                    }}
+                  >
+                    <input
+                      value={routeCodeInput}
+                      onChange={(event) =>
+                        setRouteCodeInput(
+                          event.target.value.replace(/\D/g, '').slice(0, 6),
+                        )
+                      }
+                      inputMode="numeric"
+                      pattern="[0-9]{6}"
+                      maxLength={6}
+                      placeholder="Enter 6-digit code"
+                      aria-label="Six-digit route code"
+                    />
+                    <button
+                      type="submit"
+                      disabled={isImportingRoute || routeCodeInput.length !== 6}
+                    >
+                      {isImportingRoute ? 'Opening…' : 'Open route'}
+                    </button>
+                  </form>
+                  {shareMessage && <p className="route-share-message">{shareMessage}</p>}
+                  <small className="route-share-warning">
+                    Anyone with the code can open this location history for seven days.
+                  </small>
+                </section>
+                <p className="privacy-note">Locations remain on this device unless you create a temporary route code.</p>
               </>
             )}
           </div>
@@ -1497,7 +1793,21 @@ function App() {
                 }}
               />
             )}
+            {isTracking && currentWard && (
+              <GeoJSON
+                key={`live-ward-${currentWard.properties.ward_id}`}
+                data={currentWard.geometry}
+                interactive={false}
+                style={{
+                  color: currentWardColor,
+                  weight: 4,
+                  fillColor: currentWardColor,
+                  fillOpacity: 0.24,
+                }}
+              />
+            )}
             {activeProject.zones.map((zone, index) => (
+              !isTracking &&
               visibleZoneIds.has(zone.id) &&
               zone.geometry && (
                 <GeoJSON
@@ -1521,7 +1831,7 @@ function App() {
               )
             ))}
             {activeProject.zones.map((zone, index) => (
-              visibleZoneIds.has(zone.id) && (
+              !isTracking && visibleZoneIds.has(zone.id) && (
               <CircleMarker
                 key={`${zone.id}-point`}
                 center={[zone.lat, zone.lng]}
@@ -1564,6 +1874,44 @@ function App() {
                 <Polyline positions={trackPositions} pathOptions={{ color: '#078765', weight: 4, opacity: 0.95, lineCap: 'round', lineJoin: 'round' }} />
               </>
             )}
+            {activeProject.markers.map((marker, index) => (
+              <CircleMarker
+                key={marker.id}
+                center={[marker.lat, marker.lng]}
+                radius={7}
+                pathOptions={{
+                  color: '#fff',
+                  weight: 3,
+                  fillColor: '#f59e0b',
+                  fillOpacity: 1,
+                }}
+              >
+                <Tooltip direction="top" offset={[0, -8]}>
+                  {marker.label}
+                </Tooltip>
+                <Popup className="place-popup" minWidth={210}>
+                  <div className="marker-popup">
+                    <span><Flag size={16} fill="currentColor" /></span>
+                    <div>
+                      <strong>{marker.label}</strong>
+                      <small>Marked {new Date(marker.createdAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</small>
+                    </div>
+                    <button
+                      type="button"
+                      aria-label={`Delete marker ${index + 1}`}
+                      onClick={() =>
+                        updateProject((project) => ({
+                          ...project,
+                          markers: project.markers.filter((item) => item.id !== marker.id),
+                        }))
+                      }
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                </Popup>
+              </CircleMarker>
+            ))}
             {currentPoint && (
               <>
                 <Circle
@@ -1636,6 +1984,16 @@ function App() {
             </div>
           )}
 
+          {isTracking && currentWard && (
+            <div className="live-territory-chip">
+              <MapPinned size={16} />
+              <span>
+                <small>Current territory</small>
+                <strong>Ward {currentWard.properties.ward_id} · {currentWard.properties.ward_name}</strong>
+              </span>
+            </div>
+          )}
+
           <div className="mobile-map-stats">
             <span><strong>{coveragePercent}%</strong> covered</span>
             <span><strong>{formatDistance(routeDistance)}</strong> travelled</span>
@@ -1666,6 +2024,17 @@ function App() {
                 title="Reset route"
               >
                 <RotateCcw size={18} />
+              </button>
+            )}
+            {isTracking && currentPoint && (
+              <button
+                type="button"
+                className="mark-place-button"
+                onClick={markCurrentPlace}
+                aria-label="Mark this important place"
+                title="Mark important place"
+              >
+                <Flag size={18} fill="currentColor" /> Mark place
               </button>
             )}
             <button
