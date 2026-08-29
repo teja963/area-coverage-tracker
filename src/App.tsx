@@ -84,6 +84,7 @@ type Project = {
   name: string
   zones: Zone[]
   track: TrackPoint[]
+  roadPath?: Array<[number, number]>
   markers: JourneyMarker[]
   shareCode?: string
   shareExpiresAt?: number
@@ -140,9 +141,8 @@ const AREA_COLORS = [
 ]
 const TERRITORY_COLORS = ['#3b82f6', '#f97316', '#22c55e', '#8b5cf6', '#f43f5e']
 const ROUTE_SHARE_API = 'https://coverly-route-share.panasateja123.workers.dev'
-const ROAD_ROUTER_API = 'https://router.project-osrm.org'
-const ROAD_SNAP_MIN_SPEED = 2
-const ROAD_SNAP_MAX_DISTANCE = 35
+const LOCAL_ROAD_MATCH_API = 'https://valhalla1.openstreetmap.de/trace_route'
+const ROAD_MATCH_CHUNK_SIZE = 100
 const IMPORTANT_PLACE_ICON = divIcon({
   className: 'important-place-marker',
   html: `
@@ -432,39 +432,62 @@ function trackDistance(track: TrackPoint[]) {
   )
 }
 
-function inferredTrackSpeed(track: TrackPoint[], index: number) {
-  const previous = track[index - 1]
-  const next = track[index + 1]
-  const first = previous ?? track[index]
-  const last = next ?? track[index]
-  const elapsedSeconds = (last.timestamp - first.timestamp) / 1000
-  return elapsedSeconds > 0 ? distanceMeters(first, last) / elapsedSeconds : 0
+function decodeRoadShape(encoded: string): Array<[number, number]> {
+  const path: Array<[number, number]> = []
+  let index = 0
+  let lat = 0
+  let lng = 0
+  const nextValue = () => {
+    let result = 0
+    let shift = 0
+    let byte = 0
+    do {
+      byte = encoded.charCodeAt(index++) - 63
+      result |= (byte & 0x1f) << shift
+      shift += 5
+    } while (byte >= 0x20 && index < encoded.length)
+    return result & 1 ? ~(result >> 1) : result >> 1
+  }
+  while (index < encoded.length) {
+    lat += nextValue()
+    lng += nextValue()
+    path.push([lat / 1e6, lng / 1e6])
+  }
+  return path
 }
 
-async function matchRoadChunk(points: TrackPoint[]) {
-  const coordinates = points
-    .map((point) => `${point.lng.toFixed(6)},${point.lat.toFixed(6)}`)
-    .join(';')
-  const radiuses = points
-    .map((point) => String(Math.round(Math.min(35, Math.max(8, point.accuracy)))))
-    .join(';')
-  const response = await fetch(
-    `${ROAD_ROUTER_API}/match/v1/driving/${coordinates}?overview=false&gaps=split&tidy=true&radiuses=${radiuses}`,
-  )
-  if (!response.ok) return points.map(() => null)
-  const result = await response.json() as {
-    code?: string
-    tracepoints?: Array<{ location?: [number, number] } | null>
-  }
-  if (result.code !== 'Ok' || !Array.isArray(result.tracepoints)) {
-    return points.map(() => null)
-  }
-  return points.map((_, index) => {
-    const match = result.tracepoints?.[index]
-    return match?.location
-      ? { lat: match.location[1], lng: match.location[0] }
-      : null
+function roadMatchSamples(points: TrackPoint[]) {
+  if (points.length <= ROAD_MATCH_CHUNK_SIZE) return points
+  const minimumSpacing = Math.max(6, trackDistance(points) / 800)
+  const sampled = [points[0]]
+  points.slice(1, -1).forEach((point) => {
+    if (distanceMeters(sampled[sampled.length - 1], point) >= minimumSpacing) {
+      sampled.push(point)
+    }
   })
+  sampled.push(points[points.length - 1])
+  return sampled
+}
+
+async function matchLocalRoadChunk(points: TrackPoint[]) {
+  if (points.length < 2) return []
+  const response = await fetch(LOCAL_ROAD_MATCH_API, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      shape: points.map((point) => ({ lat: point.lat, lon: point.lng })),
+      costing: 'pedestrian',
+      shape_match: 'map_snap',
+      filters: { action: 'include', attributes: ['shape'] },
+    }),
+  })
+  if (!response.ok) return []
+  const result = await response.json() as {
+    trip?: { legs?: Array<{ shape?: string }> }
+  }
+  return (result.trip?.legs ?? []).flatMap((leg) =>
+    leg.shape ? decodeRoadShape(leg.shape) : [],
+  )
 }
 
 function formatDuration(ms: number) {
@@ -1171,6 +1194,7 @@ function App() {
         return {
           ...project,
           track: [...project.track, nextPoint],
+          roadPath: undefined,
           updatedAt: Date.now(),
         }
       }),
@@ -1194,7 +1218,7 @@ function App() {
     if (!activeProject.track.length) return
     if (!window.confirm('Reset the recorded route and start fresh?')) return
     stopTracking()
-    updateProject((project) => ({ ...project, track: [] }))
+    updateProject((project) => ({ ...project, track: [], roadPath: undefined }))
     setLivePoint(null)
     setGpsAccuracy(null)
     setLiveSpeed(null)
@@ -1204,49 +1228,61 @@ function App() {
     if (isAligningRoute || activeProject.track.length < 2) return
     const projectId = activeId
     const source = activeProject.track
-    const aligned = source.map((point) => ({ ...point }))
-    let alignedCount = 0
+    const matchingSource = roadMatchSamples(source)
+    const roadPath: Array<[number, number]> = []
+    let matchedChunks = 0
     setIsAligningRoute(true)
-    setRoadAlignMessage('Matching moving sections to nearby roads…')
+    setRoadAlignMessage('Matching the route to local and dead-end roads…')
     try {
-      for (let start = 0; start < source.length; start += 10) {
-        const chunk = source.slice(start, start + 10)
-        if (chunk.length < 2) continue
-        const matches = await matchRoadChunk(chunk)
-        matches.forEach((match, localIndex) => {
-          if (!match) return
-          const index = start + localIndex
-          const point = source[index]
-          const snapDistance = distanceMeters(point, match)
-          if (
-            inferredTrackSpeed(source, index) < ROAD_SNAP_MIN_SPEED ||
-            point.accuracy > 35 ||
-            snapDistance > ROAD_SNAP_MAX_DISTANCE
-          ) {
-            return
-          }
-          aligned[index] = {
-            ...aligned[index],
-            roadLat: match.lat,
-            roadLng: match.lng,
-          }
-          alignedCount += 1
-        })
+      for (
+        let start = 0;
+        start < matchingSource.length - 1;
+        start += ROAD_MATCH_CHUNK_SIZE - 1
+      ) {
+        const chunk = matchingSource.slice(start, start + ROAD_MATCH_CHUNK_SIZE)
+        const matchedPath = await matchLocalRoadChunk(chunk)
+        if (matchedPath.length < 2) continue
+        const previousEnd = roadPath[roadPath.length - 1]
+        const firstNewPoint = matchedPath[0]
+        const appendFrom =
+          previousEnd &&
+          distanceMeters(
+            { lat: previousEnd[0], lng: previousEnd[1] },
+            { lat: firstNewPoint[0], lng: firstNewPoint[1] },
+          ) < 3
+            ? 1
+            : 0
+        roadPath.push(...matchedPath.slice(appendFrom))
+        matchedChunks += 1
+        setRoadAlignMessage(
+          `Matching local roads… ${Math.min(matchingSource.length, start + chunk.length)} of ${matchingSource.length} route samples`,
+        )
+      }
+      if (roadPath.length < 2) {
+        throw new Error('No local-road path found')
       }
       setProjects((current) =>
         current.map((project) =>
           project.id === projectId
-            ? { ...project, track: aligned, updatedAt: Date.now() }
+            ? {
+                ...project,
+                roadPath,
+                track: project.track.map(({ lat, lng, accuracy, timestamp }) => ({
+                  lat,
+                  lng,
+                  accuracy,
+                  timestamp,
+                })),
+                updatedAt: Date.now(),
+              }
             : project,
         ),
       )
       setRoadAlignMessage(
-        alignedCount
-          ? `${alignedCount} moving points aligned. Unmatched raw GPS remains visible as dots.`
-          : 'No safe nearby road matches were found. Original GPS is unchanged.',
+        `Continuous route aligned through local and dead-end roads (${matchedChunks} section${matchedChunks === 1 ? '' : 's'}). Original GPS is preserved.`,
       )
     } catch {
-      setRoadAlignMessage('Road alignment is unavailable. Original GPS is unchanged.')
+      setRoadAlignMessage('Local-road alignment is unavailable. Original GPS is unchanged.')
     } finally {
       setIsAligningRoute(false)
     }
@@ -1261,8 +1297,14 @@ function App() {
         accuracy,
         timestamp,
       })),
+      roadPath: undefined,
     }))
     setRoadAlignMessage('Showing the original GPS route.')
+  }
+
+  const pauseTracking = () => {
+    stopTracking()
+    window.setTimeout(() => void alignExistingRoute(), 0)
   }
 
   const markCurrentPlace = () => {
@@ -1539,37 +1581,14 @@ function App() {
     if (activeId === id) changeActiveProject(remaining[0].id)
   }
 
-  const hasRoadAlignment = activeProject.track.some(
-    (point) => point.roadLat !== undefined && point.roadLng !== undefined,
-  )
+  const hasRoadAlignment = (activeProject.roadPath?.length ?? 0) > 1
   const rawTrackPositions: LatLngExpression[] = activeProject.track.map((point) => [
     point.lat,
     point.lng,
   ])
-  const alignedTrackSegments = (() => {
-    const segments: LatLngExpression[][] = []
-    let segment: LatLngExpression[] = []
-    activeProject.track.forEach((point) => {
-      if (point.roadLat !== undefined && point.roadLng !== undefined) {
-        segment.push([point.roadLat, point.roadLng])
-        return
-      }
-      if (segment.length > 1) segments.push(segment)
-      segment = []
-    })
-    if (segment.length > 1) segments.push(segment)
-    return segments
-  })()
-  const trackSegments =
-    hasRoadAlignment
-      ? alignedTrackSegments
-      : rawTrackPositions.length > 1
-        ? [rawTrackPositions]
-        : []
-  const rawPointStep = Math.max(1, Math.ceil(activeProject.track.length / 700))
-  const rawPointSamples = hasRoadAlignment
-    ? activeProject.track.filter((_, index) => index % rawPointStep === 0)
-    : []
+  const trackPositions: LatLngExpression[] = hasRoadAlignment
+    ? activeProject.roadPath!
+    : rawTrackPositions
   const currentPoint = livePoint ?? activeProject.track[activeProject.track.length - 1]
   const currentWard = useMemo(
     () =>
@@ -1947,8 +1966,8 @@ function App() {
                 {activeProject.track.length > 1 && (
                   <section className="road-align-card">
                     <div>
-                      <strong>Road-aligned display</strong>
-                      <small>Matched roads become lines · raw GPS remains as dots</small>
+                      <strong>Continuous local-road route</strong>
+                      <small>Includes residential, service and dead-end roads</small>
                     </div>
                     <button
                       type="button"
@@ -1967,7 +1986,7 @@ function App() {
                         ? 'Aligning…'
                         : hasRoadAlignment
                           ? 'Show raw GPS route'
-                          : 'Align road sections'}
+                          : 'Align to all local roads'}
                     </button>
                     {roadAlignMessage && <p>{roadAlignMessage}</p>}
                   </section>
@@ -2251,32 +2270,18 @@ function App() {
               </CircleMarker>
               )
             ))}
-            {trackSegments.flatMap((positions, index) => [
-              <Polyline
-                key={`route-glow-${index}`}
-                positions={positions}
-                pathOptions={{ color: '#17b88a', weight: 13, opacity: 0.2, lineCap: 'round', lineJoin: 'round' }}
-              />,
-              <Polyline
-                key={`route-line-${index}`}
-                positions={positions}
-                pathOptions={{ color: '#078765', weight: 4, opacity: 0.95, lineCap: 'round', lineJoin: 'round' }}
-              />,
-            ])}
-            {rawPointSamples.map((point, index) => (
-              <CircleMarker
-                key={`raw-point-${point.timestamp}-${index}`}
-                center={[point.lat, point.lng]}
-                radius={2}
-                interactive={false}
-                pathOptions={{
-                  color: '#0f766e',
-                  weight: 1,
-                  fillColor: '#34d399',
-                  fillOpacity: 0.65,
-                }}
-              />
-            ))}
+            {trackPositions.length > 1 && (
+              <>
+                <Polyline
+                  positions={trackPositions}
+                  pathOptions={{ color: '#17b88a', weight: 13, opacity: 0.2, lineCap: 'round', lineJoin: 'round' }}
+                />
+                <Polyline
+                  positions={trackPositions}
+                  pathOptions={{ color: '#078765', weight: 4, opacity: 0.95, lineCap: 'round', lineJoin: 'round' }}
+                />
+              </>
+            )}
             {activeProject.markers.map((marker, index) => (
               <Marker
                 key={marker.id}
@@ -2493,7 +2498,7 @@ function App() {
             <button
               type="button"
               className={isTracking ? 'stop-button' : 'start-button'}
-              onClick={isTracking ? stopTracking : startTracking}
+              onClick={isTracking ? pauseTracking : startTracking}
             >
               {isTracking ? <><Pause size={18} fill="currentColor" /> Pause</> : <><Play size={18} fill="currentColor" /> Start tracking</>}
             </button>
@@ -2508,7 +2513,7 @@ function App() {
           className={`mobile-track ${isTracking ? 'active' : ''}`}
           onClick={() => {
             setTab('map')
-            if (isTracking) stopTracking()
+            if (isTracking) pauseTracking()
             else void startTracking()
           }}
         >
